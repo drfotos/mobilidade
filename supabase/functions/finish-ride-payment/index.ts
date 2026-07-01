@@ -48,10 +48,14 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Não autorizado" }, 401);
 
-    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-      auth: { persistSession: false }, global: { headers: { Authorization: authHeader } },
+    const authClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      auth: { persistSession: false },
+      global: { headers: { Authorization: authHeader } },
     });
-    const { data: { user } } = await supabase.auth.getUser();
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: { user } } = await authClient.auth.getUser();
     if (!user) return json({ error: "Sessão inválida" }, 401);
     const companyId = user.app_metadata?.company_id;
     const role = user.app_metadata?.role;
