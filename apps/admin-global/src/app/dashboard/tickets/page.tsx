@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Send } from "lucide-react";
+import { getSession, supaQuery, callFunction } from "@/lib/supa";
 
 export default function SuperAdminTicketsPage() {
   const router = useRouter();
@@ -14,60 +14,46 @@ export default function SuperAdminTicketsPage() {
   const [newMessage, setNewMessage] = useState("");
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
-    // Super admin vê apenas tickets client_to_superadmin
-    const { data } = await supabase.from("tickets").select("*").eq("ticket_type", "client_to_superadmin").order("created_at", { ascending: false });
-    setTickets(data || []);
-    setLoading(false);
+    try {
+      // Super admin vê apenas tickets client_to_superadmin
+      const data = await supaQuery(`tickets?select=*&ticket_type=eq.client_to_superadmin&order=created_at.desc`);
+      setTickets(data || []);
+    } catch (err) {
+      console.error("load tickets error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [router]);
 
   async function loadMessages(ticketId: string) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: ticket } = await supabase.from("tickets").select("*").eq("id", ticketId).maybeSingle();
-    setSelectedTicket(ticket);
-    const { data: msgs } = await supabase.from("ticket_messages").select("*").eq("ticket_id", ticketId).order("created_at");
-    setMessages(msgs || []);
+    try {
+      const ticketData = await supaQuery(`tickets?select=*&id=eq.${ticketId}`);
+      setSelectedTicket(ticketData?.[0] || null);
+      const msgs = await supaQuery(`ticket_messages?select=*&ticket_id=eq.${ticketId}&order=created_at.asc`);
+      setMessages(msgs || []);
+    } catch (err) { console.error("loadMessages error:", err); }
   }
 
   async function sendMessage() {
     if (!newMessage.trim() || !selectedTicket) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-    await fetch(`${url}/functions/v1/update-ticket`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-      body: JSON.stringify({ ticket_id: selectedTicket.id, message: newMessage }),
-    });
-    setNewMessage("");
-    loadMessages(selectedTicket.id);
+    try {
+      await callFunction("update-ticket", { ticket_id: selectedTicket.id, message: newMessage });
+      setNewMessage("");
+      loadMessages(selectedTicket.id);
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function updateStatus(status: string) {
     if (!selectedTicket) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-    await fetch(`${url}/functions/v1/update-ticket`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-      body: JSON.stringify({ ticket_id: selectedTicket.id, status }),
-    });
-    loadMessages(selectedTicket.id);
-    load();
+    try {
+      await callFunction("update-ticket", { ticket_id: selectedTicket.id, status });
+      loadMessages(selectedTicket.id);
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;

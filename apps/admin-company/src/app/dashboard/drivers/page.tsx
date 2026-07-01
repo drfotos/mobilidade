@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Check, X } from "lucide-react";
+import { getSession, supaQuery, supaUpdate } from "@/lib/supa";
 
 export default function DriversPage() {
   const router = useRouter();
@@ -11,26 +11,26 @@ export default function DriversPage() {
   const [loading, setLoading] = useState(true);
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
-    const { data } = await supabase.from("drivers").select("id, status, rating, total_rides, cnh_number, cnh_category, users(name, email, phone)").eq("company_id", companyId).order("created_at", { ascending: false });
-    setDrivers(data || []);
-    setLoading(false);
+    try {
+      const data = await supaQuery(`drivers?select=id,status,rating,total_rides,cnh_number,cnh_category,users(name,email,phone)&company_id=eq.${companyId}&order=created_at.desc`);
+      setDrivers(data || []);
+    } catch (err) {
+      console.error("load drivers error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [router]);
 
   async function updateStatus(id: string, status: string) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("drivers").update({ status }).eq("id", id);
-    load();
+    try {
+      await supaUpdate("drivers", `id=eq.${id}`, { status });
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center">Carregando...</div>;

@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import { Star, Loader2, Check } from "lucide-react";
+import { getSession, callFunction } from "@/lib/supa";
 
 export default function RatePage() {
   const router = useRouter();
@@ -23,19 +23,9 @@ export default function RatePage() {
     if (stars === 0 || !rideId) return;
     setSubmitting(true);
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+      const session = getSession();
       if (!session) return router.push("/auth/login");
-      const res = await fetch(`${url}/functions/v1/rate-ride`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, apikey: key },
-        body: JSON.stringify({ ride_id: rideId, stars }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      await callFunction("rate-ride", { ride_id: rideId, stars });
       setDone(true);
       setTimeout(() => router.push("/app"), 2000);
     } catch (err) {

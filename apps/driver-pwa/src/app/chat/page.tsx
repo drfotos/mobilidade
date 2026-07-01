@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import { ArrowLeft, Send } from "lucide-react";
+import { getSession, supaQuery, callFunction } from "@/lib/supa";
+import { getSupabase } from "@/lib/supabase-client";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -13,7 +14,6 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const supabaseRef = useRef<any>(null);
 
   // Lê ride_id da URL client-side (sem useSearchParams para evitar BAILOUT_TO_CLIENT_SIDE_RENDERING)
   useEffect(() => {
@@ -26,22 +26,24 @@ export default function ChatPage() {
   useEffect(() => {
     if (!rideId) return;
     async function init() {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      supabaseRef.current = supabase;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+      const session = getSession();
       if (!session) return router.push("/auth/login");
       setRole(session.user.app_metadata?.role || "passenger");
 
-      const { data: r } = await supabase.from("rides").select("*").eq("id", rideId).maybeSingle();
-      setRide(r);
+      try {
+        const rData = await supaQuery(`rides?select=*&id=eq.${rideId}`);
+        setRide(rData?.[0] || null);
 
-      const { data: msgs } = await supabase.from("chat_messages").select("*").eq("ride_id", rideId).order("created_at");
-      setMessages(msgs || []);
-      setLoading(false);
+        const msgs = await supaQuery(`chat_messages?select=*&ride_id=eq.${rideId}&order=created_at.asc`);
+        setMessages(msgs || []);
+      } catch (err) {
+        console.error("chat init error:", err);
+      } finally {
+        setLoading(false);
+      }
 
+      // Realtime via createClient (WebSocket envia o token corretamente)
+      const supabase = getSupabase();
       const channel = supabase.channel(`chat-${rideId}`)
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `ride_id=eq.${rideId}` }, (payload: any) => {
           setMessages((prev) => [...prev, payload.new]);
@@ -62,16 +64,7 @@ export default function ChatPage() {
     const message = newMessage.trim();
     setNewMessage("");
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
-      const res = await fetch(`${url}/functions/v1/send-chat-message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ ride_id: rideId, message }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      await callFunction("send-chat-message", { ride_id: rideId, message });
     } catch (err) {
       alert("Erro: " + (err as Error).message);
       setNewMessage(message);

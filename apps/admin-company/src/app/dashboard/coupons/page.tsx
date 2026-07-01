@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Plus, Trash2, Tag } from "lucide-react";
+import { getSession, supaQuery, supaUpdate, supaDelete, callFunction } from "@/lib/supa";
 
 export default function CouponsPage() {
   const router = useRouter();
@@ -13,16 +13,17 @@ export default function CouponsPage() {
   const [form, setForm] = useState({ code: "", description: "", discount_type: "percentage", discount_value: 10, max_uses: "", valid_until: "" });
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
-    const { data } = await supabase.from("coupons").select("*").eq("company_id", companyId).order("created_at", { ascending: false });
-    setCoupons(data || []);
-    setLoading(false);
+    try {
+      const data = await supaQuery(`coupons?select=*&company_id=eq.${companyId}&order=created_at.desc`);
+      setCoupons(data || []);
+    } catch (err) {
+      console.error("load coupons error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [router]);
@@ -30,23 +31,12 @@ export default function CouponsPage() {
   async function createCoupon(e: React.FormEvent) {
     e.preventDefault();
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-      const res = await fetch(`${url}/functions/v1/create-coupon`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({
-          code: form.code, description: form.description,
-          discount_type: form.discount_type, discount_value: Number(form.discount_value),
-          max_uses: form.max_uses ? Number(form.max_uses) : null,
-          valid_until: form.valid_until || null,
-        }),
+      await callFunction("create-coupon", {
+        code: form.code, description: form.description,
+        discount_type: form.discount_type, discount_value: Number(form.discount_value),
+        max_uses: form.max_uses ? Number(form.max_uses) : null,
+        valid_until: form.valid_until || null,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       setShowForm(false);
       setForm({ code: "", description: "", discount_type: "percentage", discount_value: 10, max_uses: "", valid_until: "" });
       load();
@@ -55,19 +45,17 @@ export default function CouponsPage() {
 
   async function deleteCoupon(id: string) {
     if (!confirm("Excluir cupom?")) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("coupons").delete().eq("id", id);
-    load();
+    try {
+      await supaDelete("coupons", `id=eq.${id}`);
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function toggleActive(id: string, active: boolean) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("coupons").update({ active: !active }).eq("id", id);
-    load();
+    try {
+      await supaUpdate("coupons", `id=eq.${id}`, { active: !active });
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center">Carregando...</div>;

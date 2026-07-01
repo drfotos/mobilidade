@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Ban, Check, AlertTriangle } from "lucide-react";
+import { getSession, supaQuery, supaUpdate, callFunction } from "@/lib/supa";
 
 export default function ClientsPage() {
   const router = useRouter();
@@ -12,17 +12,18 @@ export default function ClientsPage() {
   const [filter, setFilter] = useState("all");
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
-    let query = supabase.from("companies").select("*").order("created_at", { ascending: false });
-    if (filter !== "all") query = query.eq("payment_status", filter);
-    const { data } = await query;
-    setCompanies(data || []);
-    setLoading(false);
+    try {
+      let path = `companies?select=*&order=created_at.desc`;
+      if (filter !== "all") path += `&payment_status=eq.${filter}`;
+      const data = await supaQuery(path);
+      setCompanies(data || []);
+    } catch (err) {
+      console.error("load clients error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [filter]);
@@ -31,17 +32,7 @@ export default function ClientsPage() {
     const reason = prompt("Motivo da suspensão:");
     if (!reason) return;
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-      const res = await fetch(`${url}/functions/v1/suspend-client`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ company_id: companyId, action: "suspend", reason }),
-      });
-      if (!res.ok) throw new Error("Erro ao suspender");
+      await callFunction("suspend-client", { company_id: companyId, action: "suspend", reason });
       load();
     } catch (err) { alert("Erro: " + (err as Error).message); }
   }
@@ -49,26 +40,16 @@ export default function ClientsPage() {
   async function reactivateClient(companyId: string) {
     if (!confirm("Reativar este cliente?")) return;
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-      await fetch(`${url}/functions/v1/suspend-client`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ company_id: companyId, action: "reactivate" }),
-      });
+      await callFunction("suspend-client", { company_id: companyId, action: "reactivate" });
       load();
     } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function changePlan(companyId: string, plan: string) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("companies").update({ plan }).eq("id", companyId);
-    load();
+    try {
+      await supaUpdate("companies", `id=eq.${companyId}`, { plan });
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;

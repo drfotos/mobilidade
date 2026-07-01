@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { Building2, Car, CreditCard, TrendingUp, LogOut, Shield, Users, MessageSquare } from "lucide-react";
+import { getSession, supaQuery, signOut } from "@/lib/supa";
 
 export default function AdminGlobalDashboard() {
   const router = useRouter();
@@ -14,32 +14,38 @@ export default function AdminGlobalDashboard() {
   useEffect(() => {
     async function load() {
       try {
-        const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-        const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-        const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+        const session = getSession();
         if (!session) return router.push("/auth/login");
         const role = session.user.app_metadata?.role;
         if (role !== "super_admin") {
-          await supabase.auth.signOut();
-          return router.push("/auth/login");
+          signOut();
+          return;
         }
-        const { data: companiesData } = await supabase.from("companies").select("id, name, slug, plan, status, created_at").order("created_at", { ascending: false }).limit(50);
+
+        const [companiesData, driversData, ridesData, payments] = await Promise.all([
+          supaQuery(`companies?select=id,name,slug,plan,status,created_at&order=created_at.desc&limit=50`),
+          supaQuery(`drivers?select=id`),
+          supaQuery(`rides?select=id`),
+          supaQuery(`payments?select=amount&status=eq.paid`),
+        ]);
+
         setCompanies(companiesData || []);
-        const active = (companiesData || []).filter((c) => c.status === "active").length;
-        const suspended = (companiesData || []).filter((c) => c.status === "suspended").length;
-        setStats((s) => ({ ...s, companies: companiesData?.length || 0, activeCompanies: active, suspendedCompanies: suspended }));
-        // Use regular select instead of head:true (views don't support count headers)
-        const { data: driversData } = await supabase.from("drivers").select("id");
-        const { data: ridesData } = await supabase.from("rides").select("id");
-        setStats((s) => ({ ...s, totalDrivers: driversData?.length || 0, totalRides: ridesData?.length || 0 }));
+        const active = (companiesData || []).filter((c: any) => c.status === "active").length;
+        const suspended = (companiesData || []).filter((c: any) => c.status === "suspended").length;
+        const revenue = (payments || []).reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+
         const today = new Date(); today.setHours(0, 0, 0, 0);
-        const { data: ridesTodayData } = await supabase.from("rides").select("id").gte("created_at", today.toISOString());
-        setStats((s) => ({ ...s, ridesToday: ridesTodayData?.length || 0 }));
-        const { data: payments } = await supabase.from("payments").select("amount").eq("status", "paid");
-        const revenue = (payments || []).reduce((sum, p) => sum + Number(p.amount), 0);
-        setStats((s) => ({ ...s, totalRevenue: revenue }));
+        const ridesTodayData = await supaQuery(`rides?select=id&created_at=gte.${today.toISOString()}`);
+
+        setStats({
+          companies: companiesData?.length || 0,
+          activeCompanies: active,
+          suspendedCompanies: suspended,
+          totalDrivers: driversData?.length || 0,
+          totalRides: ridesData?.length || 0,
+          ridesToday: ridesTodayData?.length || 0,
+          totalRevenue: revenue,
+        });
         setLoading(false);
       } catch (err) {
         console.error("Dashboard load error:", err);
@@ -48,13 +54,6 @@ export default function AdminGlobalDashboard() {
     }
     load();
   }, [router]);
-
-  async function signOut() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    await createClient(url, key).auth.signOut();
-    router.push("/auth/login");
-  }
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
 

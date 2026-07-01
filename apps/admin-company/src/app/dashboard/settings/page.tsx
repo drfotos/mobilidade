@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Save } from "lucide-react";
+import { getSession, supaQuery, supaUpdate, callFunction } from "@/lib/supa";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -14,17 +14,18 @@ export default function SettingsPage() {
 
   useEffect(() => {
     async function load() {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+      const session = getSession();
       if (!session) return router.push("/auth/login");
       const companyId = session.user.app_metadata?.company_id;
-      const { data } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
-      setCompany(data);
-      setMpConfig(data?.mercadopago_config || { access_token: "", public_key: "" });
-      setMapsConfig(data?.maps_config || { provider: "osm", google_api_key: "", mapbox_token: "", here_api_key: "" });
+      try {
+        const data = await supaQuery(`companies?select=*&id=eq.${companyId}`);
+        const comp = data?.[0];
+        setCompany(comp);
+        setMpConfig(comp?.mercadopago_config || { access_token: "", public_key: "" });
+        setMapsConfig(comp?.maps_config || { provider: "osm", google_api_key: "", mapbox_token: "", here_api_key: "" });
+      } catch (err) {
+        console.error("load settings error:", err);
+      }
     }
     load();
   }, [router]);
@@ -32,16 +33,12 @@ export default function SettingsPage() {
   async function saveBranding() {
     setSaving(true);
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { error } = await supabase.from("companies").update({
+      await supaUpdate("companies", `id=eq.${company.id}`, {
         theme: { primary: company.primary_color, secondary: company.secondary_color, app_name: company.name, logo_url: company.logo_url },
         primary_color: company.primary_color, secondary_color: company.secondary_color, logo_url: company.logo_url,
         owner_name: company.owner_name, owner_cpf: company.owner_cpf, owner_rg: company.owner_rg,
         owner_city: company.owner_city, owner_state: company.owner_state, owner_phone: company.owner_phone,
-      }).eq("id", company.id);
-      if (error) throw error;
+      });
       alert("Identidade visual salva!");
     } catch (err) { alert("Erro: " + (err as Error).message); }
     finally { setSaving(false); }
@@ -50,18 +47,7 @@ export default function SettingsPage() {
   async function saveMaps() {
     setSaving(true);
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-      const res = await fetch(`${url}/functions/v1/update-company-maps`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify(mapsConfig),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      await callFunction("update-company-maps", mapsConfig);
       alert("Configuração de mapas salva!");
     } catch (err) { alert("Erro: " + (err as Error).message); }
     finally { setSaving(false); }
@@ -70,11 +56,7 @@ export default function SettingsPage() {
   async function saveMP() {
     setSaving(true);
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { error } = await supabase.from("companies").update({ mercadopago_config: mpConfig }).eq("id", company.id);
-      if (error) throw error;
+      await supaUpdate("companies", `id=eq.${company.id}`, { mercadopago_config: mpConfig });
       alert("Mercado Pago configurado! Pagamentos vão direto para sua conta.");
     } catch (err) { alert("Erro: " + (err as Error).message); }
     finally { setSaving(false); }

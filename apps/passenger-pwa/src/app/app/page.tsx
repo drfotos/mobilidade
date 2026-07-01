@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import { Loader2, MapPin, LogOut, Search } from "lucide-react";
+import { getSession, supaQuery, callFunction, signOut } from "@/lib/supa";
+import { getSupabase } from "@/lib/supabase-client";
 import type LType from "leaflet";
 type LMap = LType.Map;
 type LMarker = LType.Marker;
@@ -29,57 +30,59 @@ export default function PassengerApp() {
   const [requesting, setRequesting] = useState(false);
   const [activeRide, setActiveRide] = useState<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const supabaseRef = useRef<any>(null);
 
   useEffect(() => {
     async function init() {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      supabaseRef.current = supabase;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+      const session = getSession();
       if (!session) return router.push("/auth/login");
       const cId = session.user.app_metadata?.company_id;
       if (!cId) return router.push("/auth/login");
       setCompanyId(cId);
 
-      const { data: u } = await supabase.from("users").select("id").eq("auth_user_id", session.user.id).maybeSingle();
-      if (u) setUserId(u.id);
+      try {
+        const uData = await supaQuery(`users?select=id&auth_user_id=eq.${session.user.id}`);
+        const u = uData?.[0];
+        if (u) setUserId(u.id);
 
-      const { data: cats } = await supabase.from("categories").select("*").eq("company_id", cId).eq("active", true);
-      setCategories(cats || []);
-      if (cats && cats[0]) setSelectedCategory(cats[0]);
+        const cats = await supaQuery(`categories?select=*&company_id=eq.${cId}&active=eq.true`);
+        setCategories(cats || []);
+        if (cats && cats[0]) setSelectedCategory(cats[0]);
 
-      if (mapContainerRef.current && !map) {
-        const L = (await import("leaflet")).default;
-        delete (L.Icon.Default.prototype as any)._getIconUrl;
-        L.Icon.Default.mergeOptions({
-          iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-          iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-          shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-        });
-        const m = L.map(mapContainerRef.current).setView([-23.5505, -46.6333], 13);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 19 }).addTo(m);
-        const pin = L.marker(m.getCenter(), { draggable: true }).addTo(m);
-        pin.on("dragend", () => { const ll = pin.getLatLng(); setOrigin({ lat: ll.lat, lng: ll.lng }); reverseGeocode(ll.lat, ll.lng); });
-        m.on("move", () => pin.setLatLng(m.getCenter()));
-        m.on("moveend", () => { const c = m.getCenter(); setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng); });
-        setMap(m);
-        if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => { const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }; m.setView(newPos, 15); setOrigin(newPos); reverseGeocode(newPos.lat, newPos.lng); },
-            (err) => console.warn("Geolocation error:", err),
-            { enableHighAccuracy: true, timeout: 10000 }
-          );
+        if (mapContainerRef.current && !map) {
+          const L = (await import("leaflet")).default;
+          delete (L.Icon.Default.prototype as any)._getIconUrl;
+          L.Icon.Default.mergeOptions({
+            iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+            iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+            shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+          });
+          const m = L.map(mapContainerRef.current).setView([-23.5505, -46.6333], 13);
+          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 19 }).addTo(m);
+          const pin = L.marker(m.getCenter(), { draggable: true }).addTo(m);
+          pin.on("dragend", () => { const ll = pin.getLatLng(); setOrigin({ lat: ll.lat, lng: ll.lng }); reverseGeocode(ll.lat, ll.lng); });
+          m.on("move", () => pin.setLatLng(m.getCenter()));
+          m.on("moveend", () => { const c = m.getCenter(); setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng); });
+          setMap(m);
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => { const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }; m.setView(newPos, 15); setOrigin(newPos); reverseGeocode(newPos.lat, newPos.lng); },
+              (err) => console.warn("Geolocation error:", err),
+              { enableHighAccuracy: true, timeout: 10000 }
+            );
+          }
         }
-      }
-      setLoading(false);
+        setLoading(false);
 
-      const channel = supabase.channel("passenger-ride")
-        .on("postgres_changes", { event: "*", schema: "public", table: "rides", filter: `passenger_id=eq.${u?.id}` }, (payload: any) => setActiveRide(payload.new))
-        .subscribe();
-      return () => { supabase.removeChannel(channel); };
+        // Realtime via createClient (WebSocket envia o token corretamente)
+        const supabase = getSupabase();
+        const channel = supabase.channel("passenger-ride")
+          .on("postgres_changes", { event: "*", schema: "public", table: "rides", filter: `passenger_id=eq.${u?.id}` }, (payload: any) => setActiveRide(payload.new))
+          .subscribe();
+        return () => { supabase.removeChannel(channel); };
+      } catch (err) {
+        console.error("init error:", err);
+        setLoading(false);
+      }
     }
     init();
   }, [router, map]);
@@ -135,16 +138,8 @@ export default function PassengerApp() {
 
     // Valida zona de origem antes de pedir
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
-      const zoneRes = await fetch(`${url}/functions/v1/check-zone`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ lat: origin.lat, lng: origin.lng }),
-      });
-      const zoneData = await zoneRes.json();
-      if (zoneRes.ok && zoneData.in_zone === false) {
+      const zoneData = await callFunction("check-zone", { lat: origin.lat, lng: origin.lng });
+      if (zoneData && zoneData.in_zone === false) {
         alert(`🚫 ${zoneData.message || "Zona não habilitada — não operamos nesta região"}`);
         return;
       }
@@ -154,24 +149,12 @@ export default function PassengerApp() {
 
     setRequesting(true);
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
-      const res = await fetch(`${url}/functions/v1/create-ride`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ origin, destination: destinationCoords, originAddress, destinationAddress: destination, categoryId: selectedCategory.id, paymentMethod }),
+      const data = await callFunction("create-ride", {
+        origin, destination: destinationCoords, originAddress, destinationAddress: destination, categoryId: selectedCategory.id, paymentMethod,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       setActiveRide(data.ride);
     } catch (err) { alert("Erro: " + (err as Error).message); }
     finally { setRequesting(false); }
-  }
-
-  async function signOut() {
-    await supabaseRef.current.auth.signOut();
-    router.push("/auth/login");
   }
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;

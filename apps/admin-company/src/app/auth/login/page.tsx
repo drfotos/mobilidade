@@ -27,7 +27,8 @@ export default function AdminCompanyLogin() {
       const { createClient } = await import("@supabase/supabase-js");
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      // persistSession: true garante que o token seja salvo no localStorage
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
       const role = data.user?.app_metadata?.role;

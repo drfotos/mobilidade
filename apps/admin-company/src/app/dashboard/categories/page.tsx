@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Plus, Loader2, Trash2 } from "lucide-react";
+import { getSession, supaQuery, supaInsert, supaUpdate, supaDelete } from "@/lib/supa";
 
 export default function CategoriesPage() {
   const router = useRouter();
@@ -14,16 +14,17 @@ export default function CategoriesPage() {
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
-    const { data } = await supabase.from("categories").select("*").eq("company_id", companyId).order("created_at");
-    setCategories(data || []);
-    setLoading(false);
+    try {
+      const data = await supaQuery(`categories?select=*&company_id=eq.${companyId}&order=created_at.asc`);
+      setCategories(data || []);
+    } catch (err) {
+      console.error("load categories error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [router]);
@@ -32,15 +33,10 @@ export default function CategoriesPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+      const session = getSession();
       if (!session) return;
       const companyId = session.user.app_metadata?.company_id;
-      const { error } = await supabase.from("categories").insert({ ...form, company_id: companyId, vehicle_types: ["sedan", "hatch"] });
-      if (error) throw error;
+      await supaInsert("categories", { ...form, company_id: companyId, vehicle_types: ["sedan", "hatch"] });
       setShowForm(false);
       load();
     } catch (err) { alert("Erro: " + (err as Error).message); }
@@ -49,19 +45,17 @@ export default function CategoriesPage() {
 
   async function deleteCategory(id: string) {
     if (!confirm("Excluir esta categoria?")) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("categories").delete().eq("id", id);
-    load();
+    try {
+      await supaDelete("categories", `id=eq.${id}`);
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function toggleActive(id: string, active: boolean) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("categories").update({ active: !active }).eq("id", id);
-    load();
+    try {
+      await supaUpdate("categories", `id=eq.${id}`, { active: !active });
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center">Carregando...</div>;

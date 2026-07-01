@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import { Loader2, LogOut, MapPin, Navigation, Check, X, AlertTriangle } from "lucide-react";
 import { enableDriverPwaFeatures, isIOS } from "@saas/pwa-helpers";
+import { getSession, supaQuery, supaUpdate, callFunction, signOut } from "@/lib/supa";
+import { getSupabase } from "@/lib/supabase-client";
 
 export default function DriverApp() {
   const router = useRouter();
@@ -16,35 +17,41 @@ export default function DriverApp() {
   const [zoneStatus, setZoneStatus] = useState<{ inZone: boolean; message: string | null }>({ inZone: false, message: null });
   const [pwaFeaturesActive, setPwaFeaturesActive] = useState(false);
   const watchIdRef = useRef<number | null>(null);
-  const supabaseRef = useRef<any>(null);
   const cleanupPwaRef = useRef<(() => void) | null>(null);
+  const driverRef = useRef<any>(null);
+  const companyIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     async function init() {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      supabaseRef.current = supabase;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+      const session = getSession();
       if (!session) return router.push("/auth/login");
       const role = session.user.app_metadata?.role;
       const companyId = session.user.app_metadata?.company_id;
-      if (role !== "driver" || !companyId) { await supabase.auth.signOut(); return router.push("/auth/login"); }
+      if (role !== "driver" || !companyId) { signOut(); return; }
+      companyIdRef.current = companyId;
 
-      const { data: u } = await supabase.from("users").select("id, drivers!inner(id, status, cnh_category, total_rides, rating)").eq("auth_user_id", session.user.id).maybeSingle();
-      if (!u?.drivers?.[0]) { alert("Perfil de motorista não encontrado. Contate sua empresa."); return; }
-      const drv = u.drivers[0];
-      if (drv.status === "pending") { alert("Cadastro pendente. Aguarde aprovação."); return router.push("/auth/login"); }
-      if (drv.status === "suspended") { alert("Cadastro suspenso."); return router.push("/auth/login"); }
-      setDriver(drv);
-      setLoading(false);
+      try {
+        const u = await supaQuery(`users?select=id,drivers!inner(id,status,cnh_category,total_rides,rating)&auth_user_id=eq.${session.user.id}`);
+        const userRow = u?.[0];
+        if (!userRow?.drivers?.[0]) { alert("Perfil de motorista não encontrado. Contate sua empresa."); return; }
+        const drv = userRow.drivers[0];
+        if (drv.status === "pending") { alert("Cadastro pendente. Aguarde aprovação."); return router.push("/auth/login"); }
+        if (drv.status === "suspended") { alert("Cadastro suspenso."); return router.push("/auth/login"); }
+        setDriver(drv);
+        driverRef.current = drv;
+        setLoading(false);
+      } catch (err) {
+        console.error("init error:", err);
+        alert("Erro ao carregar perfil de motorista.");
+      }
 
+      // Realtime via createClient (WebSocket envia o token corretamente)
+      const supabase = getSupabase();
       const channel = supabase.channel("rides-available")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "rides", filter: `company_id=eq.${companyId}` }, (payload: any) => {
           if (payload.new.status === "solicitada") setAvailableRides((prev) => [payload.new, ...prev].slice(0, 5));
         })
-        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `driver_id=eq.${drv.id}` }, (payload: any) => setActiveRide(payload.new))
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `driver_id=eq.${driverRef.current?.id}` }, (payload: any) => setActiveRide(payload.new))
         .subscribe();
 
       return () => { supabase.removeChannel(channel); };
@@ -65,31 +72,13 @@ export default function DriverApp() {
 
   async function sendPosition(pos: { lat: number; lng: number }) {
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
-      if (!session) return;
-      await fetch(`${url}/functions/v1/update-driver-position`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, apikey: key },
-        body: JSON.stringify(pos),
-      });
+      await callFunction("update-driver-position", pos);
     } catch (err) { console.error("sendPosition error:", err); }
   }
 
   async function checkZoneStatus(lat: number, lng: number): Promise<{ inZone: boolean; message: string | null }> {
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
-      if (!session) return { inZone: false, message: "Sessão inválida" };
-      const res = await fetch(`${url}/functions/v1/check-zone`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, apikey: key },
-        body: JSON.stringify({ lat, lng }),
-      });
-      const data = await res.json();
-      if (!res.ok) return { inZone: false, message: data.error };
+      const data = await callFunction("check-zone", { lat, lng });
       return { inZone: data.in_zone === true, message: data.message };
     } catch (err) {
       console.error("checkZone error:", err);
@@ -133,64 +122,47 @@ export default function DriverApp() {
     }
 
     const newStatus = online ? "offline" : "active";
-    const { error } = await supabaseRef.current.from("drivers").update({ status: newStatus }).eq("id", driver.id);
-    if (error) { alert("Erro: " + error.message); return; }
-    setOnline(!online);
+    try {
+      await supaUpdate("drivers", `id=eq.${driver.id}`, { status: newStatus });
+      setOnline(!online);
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function acceptRide(rideId: string) {
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
-      const res = await fetch(`${url}/functions/v1/accept-ride`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ ride_id: rideId }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await callFunction("accept-ride", { ride_id: rideId });
       setActiveRide(data.ride);
       setAvailableRides((prev) => prev.filter((r) => r.id !== rideId));
     } catch (err) { alert("Erro ao aceitar: " + (err as Error).message); }
   }
 
   async function advanceRide(rideId: string, newStatus: string) {
-    const { error } = await supabaseRef.current.from("rides").update({ status: newStatus }).eq("id", rideId);
-    if (error) return alert("Erro: " + error.message);
-    const { data } = await supabaseRef.current.from("rides").select("*").eq("id", rideId).maybeSingle();
-    setActiveRide(data);
+    try {
+      await supaUpdate("rides", `id=eq.${rideId}`, { status: newStatus });
+      const data = await supaQuery(`rides?select=*&id=eq.${rideId}`);
+      setActiveRide(data?.[0] || null);
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function finishRide(rideId: string) {
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabaseRef.current.auth.getSession();
       // Usa nova edge function com precificação completa (bandeirada + km + min + paradas + gorjeta)
-      const res = await fetch(`${url}/functions/v1/finish-ride-payment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({
-          ride_id: rideId,
-          actual_distance_m: activeRide?.estimated_distance_m,
-          actual_duration_s: activeRide?.estimated_duration_s,
-          tip_amount: 0, // gorjeta é adicionada pelo passageiro depois
-          wait_minutes: 0,
-        }),
+      const data = await callFunction("finish-ride-payment", {
+        ride_id: rideId,
+        actual_distance_m: activeRide?.estimated_distance_m,
+        actual_duration_s: activeRide?.estimated_duration_s,
+        tip_amount: 0, // gorjeta é adicionada pelo passageiro depois
+        wait_minutes: 0,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       const fare = data.fare_breakdown?.total || data.fare || 0;
       alert(`✓ Corrida finalizada!\n\nValor: R$ ${Number(fare).toFixed(2)}\n\nPassageiro será redirecionado para avaliação.`);
       setActiveRide(null);
     } catch (err) { alert("Erro ao finalizar: " + (err as Error).message); }
   }
 
-  async function signOut() {
+  async function handleSignOut() {
     if (online) await toggleOnline();
-    await supabaseRef.current.auth.signOut();
-    router.push("/auth/login");
+    signOut();
   }
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
@@ -203,7 +175,7 @@ export default function DriverApp() {
             <div className={`w-2 h-2 rounded-full ${online ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
             <span className="text-sm font-medium">{online ? "Online" : "Offline"}</span>
           </div>
-          <button onClick={signOut} className="text-slate-400 hover:text-white"><LogOut className="w-5 h-5" /></button>
+          <button onClick={handleSignOut} className="text-slate-400 hover:text-white"><LogOut className="w-5 h-5" /></button>
         </div>
       </header>
       <main className="max-w-md mx-auto px-4 py-6 space-y-4">

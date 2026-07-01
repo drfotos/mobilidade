@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft, Plus, Trash2, MapPin } from "lucide-react";
+import { getSession, supaQuery, supaUpdate, supaDelete, callFunction } from "@/lib/supa";
 
 declare global { interface Window { L?: any } }
 
@@ -23,16 +23,17 @@ export default function ZonesPage() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
-    const { data } = await supabase.from("zones").select("*").eq("company_id", companyId).order("created_at");
-    setZones(data || []);
-    setLoading(false);
+    try {
+      const data = await supaQuery(`zones?select=*&company_id=eq.${companyId}&order=created_at.asc`);
+      setZones(data || []);
+    } catch (err) {
+      console.error("load zones error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [router]);
@@ -65,19 +66,7 @@ export default function ZonesPage() {
     e.preventDefault();
     if (polygon.length < 3) { alert("Desenhe pelo menos 3 pontos no mapa"); return; }
     try {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
-      if (!session) return;
-      const res = await fetch(`${url}/functions/v1/create-zone`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, apikey: key },
-        body: JSON.stringify({ name, polygon, city, state }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      await callFunction("create-zone", { name, polygon, city, state });
       setShowForm(false); setPolygon([]); setName(""); setCity(""); setState("");
       load();
     } catch (err) { alert("Erro: " + (err as Error).message); }
@@ -85,19 +74,17 @@ export default function ZonesPage() {
 
   async function deleteZone(id: string) {
     if (!confirm("Excluir zona?")) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("zones").delete().eq("id", id);
-    load();
+    try {
+      await supaDelete("zones", `id=eq.${id}`);
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function toggleActive(id: string, active: boolean) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    await supabase.from("zones").update({ active: !active }).eq("id", id);
-    load();
+    try {
+      await supaUpdate("zones", `id=eq.${id}`, { active: !active });
+      load();
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center">Carregando...</div>;

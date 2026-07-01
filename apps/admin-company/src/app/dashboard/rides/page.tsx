@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { getSession, supaQuery } from "@/lib/supa";
 
 export default function RidesPage() {
   const router = useRouter();
@@ -12,18 +12,19 @@ export default function RidesPage() {
   const [filter, setFilter] = useState("all");
 
   async function load() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await supabase.auth.getSession();
-      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
+    const session = getSession();
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
-    let query = supabase.from("rides").select("*").eq("company_id", companyId).order("created_at", { ascending: false }).limit(100);
-    if (filter !== "all") query = query.eq("status", filter);
-    const { data } = await query;
-    setRides(data || []);
-    setLoading(false);
+    try {
+      let path = `rides?select=*&company_id=eq.${companyId}&order=created_at.desc&limit=100`;
+      if (filter !== "all") path += `&status=eq.${filter}`;
+      const data = await supaQuery(path);
+      setRides(data || []);
+    } catch (err) {
+      console.error("load rides error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [router, filter]);
