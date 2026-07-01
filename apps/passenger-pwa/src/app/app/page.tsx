@@ -131,6 +131,26 @@ export default function PassengerApp() {
 
   async function requestRide() {
     if (!origin || !destinationCoords || !selectedCategory || !userId) return;
+
+    // Valida zona de origem antes de pedir
+    try {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      const { data: { session } } = await supabaseRef.current.auth.getSession();
+      const zoneRes = await fetch(`${url}/functions/v1/check-zone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
+        body: JSON.stringify({ lat: origin.lat, lng: origin.lng }),
+      });
+      const zoneData = await zoneRes.json();
+      if (zoneRes.ok && zoneData.in_zone === false) {
+        alert(`🚫 ${zoneData.message || "Zona não habilitada — não operamos nesta região"}`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Zone check falhou (permitindo):", err);
+    }
+
     setRequesting(true);
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;

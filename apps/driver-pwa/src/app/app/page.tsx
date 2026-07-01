@@ -2,7 +2,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
-import { Loader2, LogOut, MapPin, Navigation, Check, X } from "lucide-react";
+import { Loader2, LogOut, MapPin, Navigation, Check, X, AlertTriangle } from "lucide-react";
+import { enableDriverPwaFeatures, isIOS } from "@saas/pwa-helpers";
 
 export default function DriverApp() {
   const router = useRouter();
@@ -12,8 +13,11 @@ export default function DriverApp() {
   const [availableRides, setAvailableRides] = useState<any[]>([]);
   const [activeRide, setActiveRide] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [zoneStatus, setZoneStatus] = useState<{ inZone: boolean; message: string | null }>({ inZone: false, message: null });
+  const [pwaFeaturesActive, setPwaFeaturesActive] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   const supabaseRef = useRef<any>(null);
+  const cleanupPwaRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     async function init() {
@@ -72,8 +76,61 @@ export default function DriverApp() {
     } catch (err) { console.error("sendPosition error:", err); }
   }
 
+  async function checkZoneStatus(lat: number, lng: number): Promise<{ inZone: boolean; message: string | null }> {
+    try {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      const { data: { session } } = await supabaseRef.current.auth.getSession();
+      if (!session) return { inZone: false, message: "Sessão inválida" };
+      const res = await fetch(`${url}/functions/v1/check-zone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, apikey: key },
+        body: JSON.stringify({ lat, lng }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { inZone: false, message: data.error };
+      return { inZone: data.in_zone === true, message: data.message };
+    } catch (err) {
+      console.error("checkZone error:", err);
+      return { inZone: false, message: "Erro ao verificar zona" };
+    }
+  }
+
   async function toggleOnline() {
     if (!driver) return;
+
+    // Se vai ficar online, valida zona primeiro
+    if (!online) {
+      if (!position) {
+        alert("Aguardando GPS... tente novamente em alguns segundos.");
+        return;
+      }
+      const zone = await checkZoneStatus(position.lat, position.lng);
+      setZoneStatus(zone);
+      if (!zone.inZone) {
+        alert(`🚫 ${zone.message || "Zona não habilitada — você está fora da área de operação"}`);
+        return;
+      }
+
+      // Ativa PWA features (Wake Lock + audio silencioso + storage)
+      try {
+        cleanupPwaRef.current = await enableDriverPwaFeatures();
+        setPwaFeaturesActive(true);
+        if (isIOS()) {
+          console.log("[driver] iOS detectado — Wake Lock + áudio silencioso ativos");
+        }
+      } catch (err) {
+        console.warn("[driver] PWA features falharam (não crítico):", err);
+      }
+    } else {
+      // Ficando offline — libera recursos PWA
+      if (cleanupPwaRef.current) {
+        cleanupPwaRef.current();
+        cleanupPwaRef.current = null;
+        setPwaFeaturesActive(false);
+      }
+    }
+
     const newStatus = online ? "offline" : "active";
     const { error } = await supabaseRef.current.from("drivers").update({ status: newStatus }).eq("id", driver.id);
     if (error) { alert("Erro: " + error.message); return; }
@@ -109,14 +166,22 @@ export default function DriverApp() {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
       const { data: { session } } = await supabaseRef.current.auth.getSession();
-      const res = await fetch(`${url}/functions/v1/finish-ride`, {
+      // Usa nova edge function com precificação completa (bandeirada + km + min + paradas + gorjeta)
+      const res = await fetch(`${url}/functions/v1/finish-ride-payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
-        body: JSON.stringify({ ride_id: rideId, actual_distance_m: activeRide?.estimated_distance_m, actual_duration_s: activeRide?.estimated_duration_s }),
+        body: JSON.stringify({
+          ride_id: rideId,
+          actual_distance_m: activeRide?.estimated_distance_m,
+          actual_duration_s: activeRide?.estimated_duration_s,
+          tip_amount: 0, // gorjeta é adicionada pelo passageiro depois
+          wait_minutes: 0,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      alert(`Corrida finalizada! Valor: R$ ${Number(data.fare).toFixed(2)}`);
+      const fare = data.fare_breakdown?.total || data.fare || 0;
+      alert(`✓ Corrida finalizada!\n\nValor: R$ ${Number(fare).toFixed(2)}\n\nPassageiro será redirecionado para avaliação.`);
       setActiveRide(null);
     } catch (err) { alert("Erro ao finalizar: " + (err as Error).message); }
   }

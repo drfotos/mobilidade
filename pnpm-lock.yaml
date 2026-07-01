@@ -136,6 +136,9 @@ importers:
       '@saas/notifications':
         specifier: workspace:*
         version: link:../../packages/notifications
+      '@saas/pwa-helpers':
+        specifier: workspace:*
+        version: link:../../packages/pwa-helpers
       '@saas/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -249,6 +252,9 @@ importers:
       '@saas/pricing':
         specifier: workspace:*
         version: link:../../packages/pricing
+      '@saas/pwa-helpers':
+        specifier: workspace:*
+        version: link:../../packages/pwa-helpers
       '@saas/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -345,6 +351,12 @@ importers:
       '@saas/maps':
         specifier: workspace:*
         version: link:../maps
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/pwa-helpers:
     devDependencies:
       typescript:
         specifier: ^5.7.0

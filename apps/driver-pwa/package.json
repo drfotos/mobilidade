@@ -15,6 +15,7 @@
     "@saas/database": "workspace:*",
     "@saas/ui": "workspace:*",
     "@saas/notifications": "workspace:*",
+    "@saas/pwa-helpers": "workspace:*",
     "@supabase/supabase-js": "^2.45.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
