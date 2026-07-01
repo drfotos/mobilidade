@@ -1,9 +1,24 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { Building2, Car, TrendingUp, CreditCard, LogOut, Settings, MapPin, Tag, MessageSquare } from "lucide-react";
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+// Helper: raw fetch with JWT — bypasses Supabase JS client auth issues
+async function supaQuery(path: string, token: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!res.ok) throw new Error(`Query failed: ${res.status}`);
+  return res.json();
+}
 
 export default function AdminCompanyDashboard() {
   const router = useRouter();
@@ -14,46 +29,45 @@ export default function AdminCompanyDashboard() {
   useEffect(() => {
     async function load() {
       try {
-        const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-        // Create client with session persistence to auto-send JWT
-        const supabase = createClient(url, key, {
-          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-        });
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return router.push("/auth/login");
-        const role = session.user.app_metadata?.role;
-        const companyId = session.user.app_metadata?.company_id;
+        // Read session from localStorage (set by Supabase Auth on login)
+        const storageKey = `sb-vlkrlpcniippudhgggwt-auth-token`;
+        const stored = localStorage.getItem(storageKey);
+        if (!stored) return router.push("/auth/login");
+        const session = JSON.parse(stored);
+        const token = session.access_token;
+        const user = session.user;
+        if (!user) return router.push("/auth/login");
+        const role = user.app_metadata?.role;
+        const companyId = user.app_metadata?.company_id;
         if (!companyId || !["company_admin", "operator", "dispatcher", "support"].includes(role)) {
-          await supabase.auth.signOut();
           return router.push("/auth/login");
         }
 
-        // Set auth session explicitly to ensure JWT is sent with REST requests
-        await supabase.auth.setSession({
-          access_token: session.access_token,
-          refresh_token: session.refresh_token
-        });
+        // Use raw fetch with JWT — no Supabase JS client needed
+        const [compData, driversData, driversOnlineData, ridesTodayData, paymentsData] = await Promise.all([
+          supaQuery(`companies?select=name,plan,theme,primary_color,secondary_color&id=eq.${companyId}`, token),
+          supaQuery(`drivers?select=id&company_id=eq.${companyId}`, token),
+          supaQuery(`drivers?select=id&company_id=eq.${companyId}&status=eq.active`, token),
+          supaQuery(`rides?select=id&company_id=eq.${companyId}&created_at=gte.${new Date().toISOString().split("T")[0]}T00:00:00.000Z`, token),
+          supaQuery(`payments?select=amount&company_id=eq.${companyId}&status=eq.paid`, token),
+        ]);
 
-        const { data: comp } = await supabase.from("companies").select("name, plan, theme, primary_color, secondary_color").eq("id", companyId).maybeSingle();
-        if (!comp) {
-          console.error("Company not found for companyId:", companyId);
-          setLoading(false);
-          return;
-        }
+        const comp = compData?.[0];
+        if (!comp) { console.error("Company not found"); setLoading(false); return; }
         setCompany(comp);
-        if (comp?.primary_color) document.documentElement.style.setProperty("--tenant-primary", comp.primary_color);
-        else if (comp?.theme?.primary) document.documentElement.style.setProperty("--tenant-primary", comp.theme.primary);
-        if (comp?.secondary_color) document.documentElement.style.setProperty("--tenant-secondary", comp.secondary_color);
-        else if (comp?.theme?.secondary) document.documentElement.style.setProperty("--tenant-secondary", comp.theme.secondary);
+        if (comp.primary_color) document.documentElement.style.setProperty("--tenant-primary", comp.primary_color);
+        else if (comp.theme?.primary) document.documentElement.style.setProperty("--tenant-primary", comp.theme.primary);
+        if (comp.secondary_color) document.documentElement.style.setProperty("--tenant-secondary", comp.secondary_color);
+        else if (comp.theme?.secondary) document.documentElement.style.setProperty("--tenant-secondary", comp.theme.secondary);
 
-        const { data: driversData } = await supabase.from("drivers").select("id").eq("company_id", companyId);
-        const { data: driversOnlineData } = await supabase.from("drivers").select("id").eq("company_id", companyId).eq("status", "active");
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const { data: ridesTodayData } = await supabase.from("rides").select("id").eq("company_id", companyId).gte("created_at", today.toISOString());
-        const { data: payments } = await supabase.from("payments").select("amount").eq("company_id", companyId).eq("status", "paid");
-        const revenue = (payments || []).reduce((s, p) => s + Number(p.amount), 0);
-        setStats({ drivers: driversData?.length || 0, driversOnline: driversOnlineData?.length || 0, ridesToday: ridesTodayData?.length || 0, ridesActive: 0, revenue });
+        const revenue = (paymentsData || []).reduce((s: number, p: any) => s + Number(p.amount), 0);
+        setStats({
+          drivers: driversData?.length || 0,
+          driversOnline: driversOnlineData?.length || 0,
+          ridesToday: ridesTodayData?.length || 0,
+          ridesActive: 0,
+          revenue,
+        });
         setLoading(false);
       } catch (err) {
         console.error("Dashboard load error:", err);
@@ -64,13 +78,12 @@ export default function AdminCompanyDashboard() {
   }, [router]);
 
   async function signOut() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    await createClient(url, key).auth.signOut();
+    localStorage.removeItem(`sb-vlkrlpcniippudhgggwt-auth-token`);
     router.push("/auth/login");
   }
 
-  if (loading || !company) return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">Carregando...</div>;
+  if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">Carregando...</div>;
+  if (!company) return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">Erro ao carregar empresa.</div>;
 
   return (
     <div className="min-h-screen bg-slate-50">
