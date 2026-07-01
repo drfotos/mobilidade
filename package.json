@@ -1,0 +1,22 @@
+{
+  "name": "saas-mobilidade",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Plataforma White Label de Mobilidade — SaaS Multi-Tenant PWA (Uber-like)",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "functions:deploy": "supabase functions deploy",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": { "node": ">=20.0.0", "pnpm": ">=9.0.0" }
+}

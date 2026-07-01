@@ -1,0 +1,71 @@
+project_id = "mobilidade"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "auth", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = [
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3001/auth/callback",
+  "http://localhost:3002/auth/callback",
+  "http://localhost:3003/auth/callback",
+  "http://localhost:3004/auth/callback"
+]
+jwt_expiry = 3600
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+template = {}
+
+[auth.sms]
+enable_signup = false
+
+[auth.external.github]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[edge_runtime]
+enabled = true
+inspector_port = 8083
+
+[functions.create-company]
+verify_jwt = false
+
+[functions.create-ride]
+verify_jwt = true
+
+[functions.accept-ride]
+verify_jwt = true
+
+[functions.update-driver-position]
+verify_jwt = true
+
+[functions.finish-ride]
+verify_jwt = true
+
+[functions.calculate-fare]
+verify_jwt = true
+
+[functions.webhook-mercadopago]
+verify_jwt = false
+
+[analytics]
+enabled = false
