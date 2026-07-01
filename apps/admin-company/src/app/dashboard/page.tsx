@@ -13,30 +13,36 @@ export default function AdminCompanyDashboard() {
 
   useEffect(() => {
     async function load() {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push("/auth/login");
-      const role = session.user.app_metadata?.role;
-      const companyId = session.user.app_metadata?.company_id;
-      if (!companyId || !["company_admin", "operator", "dispatcher", "support"].includes(role)) {
-        await supabase.auth.signOut();
-        return router.push("/auth/login");
+      try {
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const supabase = createClient(url, key);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return router.push("/auth/login");
+        const role = session.user.app_metadata?.role;
+        const companyId = session.user.app_metadata?.company_id;
+        if (!companyId || !["company_admin", "operator", "dispatcher", "support"].includes(role)) {
+          await supabase.auth.signOut();
+          return router.push("/auth/login");
+        }
+        const { data: comp } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
+        setCompany(comp);
+        if (comp?.theme?.primary) document.documentElement.style.setProperty("--tenant-primary", comp.theme.primary);
+        if (comp?.theme?.secondary) document.documentElement.style.setProperty("--tenant-secondary", comp.theme.secondary);
+
+        // Use regular select instead of head:true count (views don't support count headers)
+        const { data: driversData } = await supabase.from("drivers").select("id").eq("company_id", companyId);
+        const { data: driversOnlineData } = await supabase.from("drivers").select("id").eq("company_id", companyId).eq("status", "active");
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const { data: ridesTodayData } = await supabase.from("rides").select("id").eq("company_id", companyId).gte("created_at", today.toISOString());
+        const { data: payments } = await supabase.from("payments").select("amount").eq("company_id", companyId).eq("status", "paid");
+        const revenue = (payments || []).reduce((s, p) => s + Number(p.amount), 0);
+        setStats({ drivers: driversData?.length || 0, driversOnline: driversOnlineData?.length || 0, ridesToday: ridesTodayData?.length || 0, ridesActive: 0, revenue });
+        setLoading(false);
+      } catch (err) {
+        console.error("Dashboard load error:", err);
+        setLoading(false);
       }
-      const { data: comp } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
-      setCompany(comp);
-      if (comp?.theme?.primary) document.documentElement.style.setProperty("--tenant-primary", comp.theme.primary);
-      if (comp?.theme?.secondary) document.documentElement.style.setProperty("--tenant-secondary", comp.theme.secondary);
-      const { count: driversCount } = await supabase.from("drivers").select("*", { count: "exact", head: true }).eq("company_id", companyId);
-      const { count: driversOnline } = await supabase.from("drivers").select("*", { count: "exact", head: true }).eq("company_id", companyId).eq("status", "active");
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const { count: ridesToday } = await supabase.from("rides").select("*", { count: "exact", head: true }).eq("company_id", companyId).gte("created_at", today.toISOString());
-      const { count: ridesActive } = await supabase.from("rides").select("*", { count: "exact", head: true }).eq("company_id", companyId).in("status", ["solicitada", "buscando", "aceita", "chegando", "embarque", "em_andamento"]);
-      const { data: payments } = await supabase.from("payments").select("amount").eq("company_id", companyId).eq("status", "paid");
-      const revenue = (payments || []).reduce((s, p) => s + Number(p.amount), 0);
-      setStats({ drivers: driversCount || 0, driversOnline: driversOnline || 0, ridesToday: ridesToday || 0, ridesActive: ridesActive || 0, revenue });
-      setLoading(false);
     }
     load();
   }, [router]);

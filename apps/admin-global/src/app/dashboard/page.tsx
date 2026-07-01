@@ -13,31 +13,37 @@ export default function AdminGlobalDashboard() {
 
   useEffect(() => {
     async function load() {
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push("/auth/login");
-      const role = session.user.app_metadata?.role;
-      if (role !== "super_admin") {
-        await supabase.auth.signOut();
-        return router.push("/auth/login");
+      try {
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const supabase = createClient(url, key);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return router.push("/auth/login");
+        const role = session.user.app_metadata?.role;
+        if (role !== "super_admin") {
+          await supabase.auth.signOut();
+          return router.push("/auth/login");
+        }
+        const { data: companiesData } = await supabase.from("companies").select("id, name, slug, plan, status, created_at").order("created_at", { ascending: false }).limit(50);
+        setCompanies(companiesData || []);
+        const active = (companiesData || []).filter((c) => c.status === "active").length;
+        const suspended = (companiesData || []).filter((c) => c.status === "suspended").length;
+        setStats((s) => ({ ...s, companies: companiesData?.length || 0, activeCompanies: active, suspendedCompanies: suspended }));
+        // Use regular select instead of head:true (views don't support count headers)
+        const { data: driversData } = await supabase.from("drivers").select("id");
+        const { data: ridesData } = await supabase.from("rides").select("id");
+        setStats((s) => ({ ...s, totalDrivers: driversData?.length || 0, totalRides: ridesData?.length || 0 }));
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const { data: ridesTodayData } = await supabase.from("rides").select("id").gte("created_at", today.toISOString());
+        setStats((s) => ({ ...s, ridesToday: ridesTodayData?.length || 0 }));
+        const { data: payments } = await supabase.from("payments").select("amount").eq("status", "paid");
+        const revenue = (payments || []).reduce((sum, p) => sum + Number(p.amount), 0);
+        setStats((s) => ({ ...s, totalRevenue: revenue }));
+        setLoading(false);
+      } catch (err) {
+        console.error("Dashboard load error:", err);
+        setLoading(false);
       }
-      const { data: companiesData } = await supabase.from("companies").select("id, name, slug, plan, status, created_at").order("created_at", { ascending: false }).limit(50);
-      setCompanies(companiesData || []);
-      const active = (companiesData || []).filter((c) => c.status === "active").length;
-      const suspended = (companiesData || []).filter((c) => c.status === "suspended").length;
-      setStats((s) => ({ ...s, companies: companiesData?.length || 0, activeCompanies: active, suspendedCompanies: suspended }));
-      const { count: driversCount } = await supabase.from("drivers").select("*", { count: "exact", head: true });
-      const { count: ridesCount } = await supabase.from("rides").select("*", { count: "exact", head: true });
-      setStats((s) => ({ ...s, totalDrivers: driversCount || 0, totalRides: ridesCount || 0 }));
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const { count: ridesToday } = await supabase.from("rides").select("*", { count: "exact", head: true }).gte("created_at", today.toISOString());
-      setStats((s) => ({ ...s, ridesToday: ridesToday || 0 }));
-      const { data: payments } = await supabase.from("payments").select("amount").eq("status", "paid");
-      const revenue = (payments || []).reduce((sum, p) => sum + Number(p.amount), 0);
-      setStats((s) => ({ ...s, totalRevenue: revenue }));
-      setLoading(false);
     }
     load();
   }, [router]);
