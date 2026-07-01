@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
-import { Building2, Car, CreditCard, TrendingUp, LogOut, Shield } from "lucide-react";
+import Link from "next/link";
+import { Building2, Car, CreditCard, TrendingUp, LogOut, Shield, Users, MessageSquare } from "lucide-react";
 
 export default function AdminGlobalDashboard() {
   const router = useRouter();
@@ -69,7 +70,27 @@ export default function AdminGlobalDashboard() {
           <KpiCard icon={<TrendingUp className="w-5 h-5 text-emerald-400" />} label="Corridas hoje" value={String(stats.ridesToday)} />
           <KpiCard icon={<CreditCard className="w-5 h-5 text-amber-400" />} label="Receita processada" value={stats.totalRevenue.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} />
         </div>
-        <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+
+        {/* Nav cards para gestão */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <Link href="/dashboard/clients" className="bg-slate-900 rounded-xl border border-slate-800 p-5 hover:border-cyan-500 transition-all">
+            <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center mb-3 text-cyan-400"><Users className="w-5 h-5" /></div>
+            <div className="font-semibold text-white">Gestão de clientes</div>
+            <div className="text-xs text-slate-400 mt-1">Bloquear, reativar, trocar plano</div>
+          </Link>
+          <Link href="/dashboard/tickets" className="bg-slate-900 rounded-xl border border-slate-800 p-5 hover:border-cyan-500 transition-all">
+            <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center mb-3 text-violet-400"><MessageSquare className="w-5 h-5" /></div>
+            <div className="font-semibold text-white">Chamados dos clientes</div>
+            <div className="text-xs text-slate-400 mt-1">Suporte ao seu cliente (dono do app)</div>
+          </Link>
+          <Link href="#empresas" className="bg-slate-900 rounded-xl border border-slate-800 p-5 hover:border-cyan-500 transition-all">
+            <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center mb-3 text-emerald-400"><Building2 className="w-5 h-5" /></div>
+            <div className="font-semibold text-white">Empresas recentes</div>
+            <div className="text-xs text-slate-400 mt-1">Lista das últimas empresas criadas</div>
+          </Link>
+        </div>
+
+        <div id="empresas" className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between">
             <h2 className="font-semibold text-white">Empresas recentes</h2>
             <span className="text-xs text-slate-400">{stats.companies} no total</span>

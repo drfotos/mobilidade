@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
-import { Building2, Car, TrendingUp, CreditCard, LogOut, Settings, MapPin } from "lucide-react";
+import { Building2, Car, TrendingUp, CreditCard, LogOut, Settings, MapPin, Tag, MessageSquare } from "lucide-react";
 
 export default function AdminCompanyDashboard() {
   const router = useRouter();
@@ -71,8 +71,11 @@ export default function AdminCompanyDashboard() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <NavCard href="/dashboard/drivers" icon={<Car className="w-5 h-5" />} title="Motoristas" desc="Cadastrar, aprovar, suspender" />
-          <NavCard href="/dashboard/categories" icon={<Settings className="w-5 h-5" />} title="Categorias" desc="Uber X, Black, Moto, etc" />
+          <NavCard href="/dashboard/categories" icon={<Settings className="w-5 h-5" />} title="Categorias" desc="Pricing: bandeirada, km, min, paradas" />
+          <NavCard href="/dashboard/zones" icon={<MapPin className="w-5 h-5" />} title="Zonas" desc="Desenhar áreas de operação" />
           <NavCard href="/dashboard/rides" icon={<TrendingUp className="w-5 h-5" />} title="Corridas" desc="Em andamento e histórico" />
+          <NavCard href="/dashboard/coupons" icon={<Tag className="w-5 h-5" />} title="Cupons" desc="Cupons de desconto" />
+          <NavCard href="/dashboard/tickets" icon={<MessageSquare className="w-5 h-5" />} title="Chamados" desc="Suporte motorista/passageiro" />
           <NavCard href="/dashboard/settings" icon={<Building2 className="w-5 h-5" />} title="Configurações" desc="Branding, mapa, pagamento" />
         </div>
       </main>
