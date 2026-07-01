@@ -1,24 +1,26 @@
 "use client";
-import { useState, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { Star, Loader2, Check } from "lucide-react";
 
 export default function RatePage() {
-  return <Suspense fallback={<div className="min-h-screen bg-slate-950" />}><RateInner /></Suspense>;
-}
-
-function RateInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const rideId = searchParams.get("ride_id");
+  const [rideId, setRideId] = useState<string | null>(null);
   const [stars, setStars] = useState(0);
   const [hover, setHover] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      setRideId(params.get("ride_id"));
+    }
+  }, []);
+
   async function submit() {
-    if (stars === 0) return;
+    if (stars === 0 || !rideId) return;
     setSubmitting(true);
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;

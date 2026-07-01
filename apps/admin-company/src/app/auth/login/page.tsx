@@ -1,20 +1,23 @@
 "use client";
-import { useState, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Loader2, Building2 } from "lucide-react";
 
 export default function AdminCompanyLogin() {
-  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><LoginInner /></Suspense>;
-}
-
-function LoginInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const slug = searchParams.get("slug") || "";
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [slug, setSlug] = useState("");
+
+  // Lê slug da URL client-side (sem useSearchParams para evitar BAILOUT_TO_CLIENT_SIDE_RENDERING)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      setSlug(params.get("slug") || "");
+    }
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

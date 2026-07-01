@@ -1,14 +1,10 @@
 "use client";
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { ArrowLeft, Plus, Send, MessageSquare } from "lucide-react";
 
 export default function TicketsPage() {
-  return <Suspense fallback={<div className="min-h-screen bg-slate-950" />}><TicketsInner /></Suspense>;
-}
-
-function TicketsInner() {
   const router = useRouter();
   const [tickets, setTickets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,8 +22,6 @@ function TicketsInner() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return router.push("/auth/login");
     setRole(session.user.app_metadata?.role || "passenger");
-    const companyId = session.user.app_metadata?.company_id;
-    // Busca tickets do passageiro/motorista
     const ticketType = session.user.app_metadata?.role === "driver" ? "driver_to_client" : "passenger_to_client";
     const { data: pubUser } = await supabase.from("users").select("id").eq("auth_user_id", session.user.id).maybeSingle();
     const { data } = await supabase.from("tickets").select("*").eq("ticket_type", ticketType).eq("opened_by", pubUser?.id).order("created_at", { ascending: false });
@@ -125,7 +119,7 @@ function TicketsInner() {
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {messages.map((m) => (
-                <div key={m.id} className={`flex ${m.sender_role === role || m.sender_role === "passenger" || m.sender_role === "driver" ? "justify-end" : "justify-start"}`}>
+                <div key={m.id} className={`flex ${m.sender_role === role ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[75%] rounded-lg px-3 py-2 ${m.sender_role === role ? "bg-cyan-500 text-white" : "bg-slate-800 text-slate-100"}`}>
                     <div className="text-xs opacity-75 mb-1">{m.sender_role}</div>
                     <div className="text-sm">{m.message}</div>

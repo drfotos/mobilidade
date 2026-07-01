@@ -1,18 +1,12 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { ArrowLeft, Send } from "lucide-react";
-import { Suspense } from "react";
 
 export default function ChatPage() {
-  return <Suspense fallback={<div className="min-h-screen bg-slate-950" />}><ChatInner /></Suspense>;
-}
-
-function ChatInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const rideId = searchParams.get("ride_id");
+  const [rideId, setRideId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [ride, setRide] = useState<any>(null);
@@ -21,9 +15,17 @@ function ChatInner() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const supabaseRef = useRef<any>(null);
 
+  // Lê ride_id da URL client-side (sem useSearchParams para evitar BAILOUT_TO_CLIENT_SIDE_RENDERING)
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      setRideId(params.get("ride_id"));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!rideId) return;
     async function init() {
-      if (!rideId) return;
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
       const supabase = createClient(url, key);
@@ -31,18 +33,14 @@ function ChatInner() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return router.push("/auth/login");
       setRole(session.user.app_metadata?.role || "passenger");
-      const companyId = session.user.app_metadata?.company_id;
 
-      // Busca ride
       const { data: r } = await supabase.from("rides").select("*").eq("id", rideId).maybeSingle();
       setRide(r);
 
-      // Busca mensagens existentes
       const { data: msgs } = await supabase.from("chat_messages").select("*").eq("ride_id", rideId).order("created_at");
       setMessages(msgs || []);
       setLoading(false);
 
-      // Subscribe a novas mensagens
       const channel = supabase.channel(`chat-${rideId}`)
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `ride_id=eq.${rideId}` }, (payload: any) => {
           setMessages((prev) => [...prev, payload.new]);
@@ -75,11 +73,11 @@ function ChatInner() {
       if (!res.ok) throw new Error(data.error);
     } catch (err) {
       alert("Erro: " + (err as Error).message);
-      setNewMessage(message); // restaura
+      setNewMessage(message);
     }
   }
 
-  if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
+  if (loading || !rideId) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
 
   const isChatClosed = ride && ["finalizada", "pagamento", "avaliada", "cancelada", "expirada"].includes(ride.status);
 
