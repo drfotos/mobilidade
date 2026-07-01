@@ -17,13 +17,15 @@ create index idx_audit_company_created on audit_log(company_id, created_at desc)
 create index idx_audit_entity on audit_log(entity, entity_id);
 alter table audit_log enable row level security;
 create policy audit_select_tenant on audit_log for select using (
-  company_id = auth.company_id() or exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'super_admin'::user_role)
+  company_id = public.company_id() or exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'super_admin'::user_role)
 );
 create policy audit_insert_tenant on audit_log for insert with check (true);
 
-create or replace function audit_capture(p_action text, p_entity text) returns trigger as $$
-declare v_company_id uuid; v_actor uuid;
+create or replace function audit_capture() returns trigger as $$
+declare v_company_id uuid; v_actor uuid; v_action text; v_entity text;
 begin
+  v_action := TG_ARGV[0];
+  v_entity := TG_ARGV[1];
   v_actor := auth.uid();
   begin
     execute format('select $1.company_id') using new into v_company_id;
@@ -32,7 +34,7 @@ begin
     exception when others then v_company_id := null; end;
   end;
   insert into audit_log (company_id, actor_user_id, actor_type, action, entity, entity_id, old_value, new_value)
-  values (v_company_id, v_actor, case when v_actor is null then 'system' else 'user' end, p_action, p_entity,
+  values (v_company_id, v_actor, case when v_actor is null then 'system' else 'user' end, v_action, v_entity,
     coalesce(new.id, old.id), case when tg_op in ('UPDATE','DELETE') then to_jsonb(old) end, case when tg_op in ('INSERT','UPDATE') then to_jsonb(new) end);
   return coalesce(new, old);
 end;
@@ -69,4 +71,4 @@ create table geofences (
 create index idx_geofences_company on geofences(company_id) where active = true;
 create index idx_geofences_polygon on geofences using gist (polygon);
 alter table geofences enable row level security;
-create policy geofences_tenant on geofences for all using (company_id = auth.company_id()) with check (company_id = auth.company_id());
+create policy geofences_tenant on geofences for all using (company_id = public.company_id()) with check (company_id = public.company_id());

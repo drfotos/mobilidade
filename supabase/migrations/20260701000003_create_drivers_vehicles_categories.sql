@@ -20,9 +20,9 @@ create index idx_drivers_position on drivers using gist (current_position) where
 create index idx_drivers_user on drivers(user_id);
 alter table drivers enable row level security;
 create policy drivers_tenant on drivers for all using (
-  company_id = auth.company_id() or exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'super_admin'::user_role)
+  company_id = public.company_id() or exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'super_admin'::user_role)
 ) with check (
-  company_id = auth.company_id() or exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'super_admin'::user_role)
+  company_id = public.company_id() or exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'super_admin'::user_role)
 );
 
 create table vehicles (
@@ -40,7 +40,7 @@ create table vehicles (
 create index idx_vehicles_company on vehicles(company_id);
 create index idx_vehicles_driver on vehicles(driver_id);
 alter table vehicles enable row level security;
-create policy vehicles_tenant on vehicles for all using (company_id = auth.company_id()) with check (company_id = auth.company_id());
+create policy vehicles_tenant on vehicles for all using (company_id = public.company_id()) with check (company_id = public.company_id());
 
 create table categories (
   id              uuid primary key default gen_random_uuid(),
@@ -62,4 +62,4 @@ create table categories (
 );
 create index idx_categories_company on categories(company_id) where active = true;
 alter table categories enable row level security;
-create policy categories_tenant on categories for all using (company_id = auth.company_id()) with check (company_id = auth.company_id());
+create policy categories_tenant on categories for all using (company_id = public.company_id()) with check (company_id = public.company_id());

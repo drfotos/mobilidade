@@ -42,14 +42,14 @@ create trigger on_auth_user_created after insert on auth.users for each row exec
 
 alter table users enable row level security;
 create policy users_select_tenant on users for select using (
-  role = 'super_admin'::user_role or company_id = auth.company_id() or auth_user_id = auth.uid()
+  role = 'super_admin'::user_role or company_id = public.company_id() or auth_user_id = auth.uid()
 );
 create policy users_insert_tenant on users for insert with check (
-  company_id = auth.company_id() or auth.uid() is null
+  company_id = public.company_id() or auth.uid() is null
 );
 create policy users_update_tenant on users for update using (
-  role = 'super_admin'::user_role or company_id = auth.company_id() or auth_user_id = auth.uid()
+  role = 'super_admin'::user_role or company_id = public.company_id() or auth_user_id = auth.uid()
 );
 create policy users_delete_tenant on users for delete using (
-  role = 'super_admin'::user_role or company_id = auth.company_id()
+  role = 'super_admin'::user_role or company_id = public.company_id()
 );

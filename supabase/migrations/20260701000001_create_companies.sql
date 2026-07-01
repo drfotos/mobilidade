@@ -22,6 +22,6 @@ begin new.updated_at = now(); return new; end; $$ language plpgsql;
 
 create trigger trg_companies_updated before update on companies for each row execute function update_updated_at();
 
-create or replace function auth.company_id() returns uuid as $$
+create or replace function public.company_id() returns uuid as $$
   select (auth.jwt() ->> 'company_id')::uuid;
 $$ language sql stable;

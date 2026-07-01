@@ -32,10 +32,10 @@ create index idx_rides_driver on rides(driver_id, created_at desc);
 create index idx_rides_company_created on rides(company_id, created_at desc);
 alter table rides enable row level security;
 create policy rides_tenant on rides for all using (
-  company_id = auth.company_id()
+  company_id = public.company_id()
   or passenger_id in (select id from users where auth_user_id = auth.uid())
   or driver_id in (select d.id from drivers d join users u on u.id = d.user_id where u.auth_user_id = auth.uid())
-) with check (company_id = auth.company_id());
+) with check (company_id = public.company_id());
 
 create table ride_events (
   id          uuid primary key default gen_random_uuid(),
@@ -50,7 +50,7 @@ create table ride_events (
 create index idx_ride_events_ride on ride_events(ride_id, created_at);
 create index idx_ride_events_company on ride_events(company_id, created_at desc);
 alter table ride_events enable row level security;
-create policy ride_events_tenant on ride_events for all using (company_id = auth.company_id()) with check (company_id = auth.company_id());
+create policy ride_events_tenant on ride_events for all using (company_id = public.company_id()) with check (company_id = public.company_id());
 
 create table payments (
   id              uuid primary key default gen_random_uuid(),
@@ -70,4 +70,4 @@ create table payments (
 create index idx_payments_company_status on payments(company_id, status);
 create index idx_payments_ride on payments(ride_id);
 alter table payments enable row level security;
-create policy payments_tenant on payments for all using (company_id = auth.company_id()) with check (company_id = auth.company_id());
+create policy payments_tenant on payments for all using (company_id = public.company_id()) with check (company_id = public.company_id());
