@@ -17,8 +17,9 @@ export default function TicketsPage() {
   async function load() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
     let query = supabase.from("tickets").select("*").or(`company_id.eq.${companyId},ticket_type.eq.client_to_superadmin`).order("created_at", { ascending: false });
@@ -33,7 +34,7 @@ export default function TicketsPage() {
   async function loadMessages(ticketId: string) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: ticket } = await supabase.from("tickets").select("*").eq("id", ticketId).maybeSingle();
     setSelectedTicket(ticket);
     const { data: msgs } = await supabase.from("ticket_messages").select("*").eq("ticket_id", ticketId).order("created_at");
@@ -45,8 +46,9 @@ export default function TicketsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       const res = await fetch(`${url}/functions/v1/update-ticket`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
@@ -63,8 +65,9 @@ export default function TicketsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       await fetch(`${url}/functions/v1/update-ticket`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },

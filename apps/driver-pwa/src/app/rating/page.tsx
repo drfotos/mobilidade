@@ -25,8 +25,9 @@ export default function RatePage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       if (!session) return router.push("/auth/login");
       const res = await fetch(`${url}/functions/v1/rate-ride`, {
         method: "POST",

@@ -14,8 +14,9 @@ export default function ClientsPage() {
   async function load() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
     if (!session) return router.push("/auth/login");
     let query = supabase.from("companies").select("*").order("created_at", { ascending: false });
     if (filter !== "all") query = query.eq("payment_status", filter);
@@ -32,8 +33,9 @@ export default function ClientsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       const res = await fetch(`${url}/functions/v1/suspend-client`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
@@ -49,8 +51,9 @@ export default function ClientsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       await fetch(`${url}/functions/v1/suspend-client`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
@@ -63,7 +66,7 @@ export default function ClientsPage() {
   async function changePlan(companyId: string, plan: string) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("companies").update({ plan }).eq("id", companyId);
     load();
   }

@@ -13,8 +13,9 @@ export default function DriversPage() {
   async function load() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
     const { data } = await supabase.from("drivers").select("id, status, rating, total_rides, cnh_number, cnh_category, users(name, email, phone)").eq("company_id", companyId).order("created_at", { ascending: false });
@@ -27,7 +28,7 @@ export default function DriversPage() {
   async function updateStatus(id: string, status: string) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("drivers").update({ status }).eq("id", id);
     load();
   }

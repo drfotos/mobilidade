@@ -16,8 +16,9 @@ export default function SettingsPage() {
     async function load() {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       if (!session) return router.push("/auth/login");
       const companyId = session.user.app_metadata?.company_id;
       const { data } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
@@ -33,7 +34,7 @@ export default function SettingsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { error } = await supabase.from("companies").update({
         theme: { primary: company.primary_color, secondary: company.secondary_color, app_name: company.name, logo_url: company.logo_url },
         primary_color: company.primary_color, secondary_color: company.secondary_color, logo_url: company.logo_url,
@@ -51,8 +52,9 @@ export default function SettingsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       const res = await fetch(`${url}/functions/v1/update-company-maps`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
@@ -70,7 +72,7 @@ export default function SettingsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { error } = await supabase.from("companies").update({ mercadopago_config: mpConfig }).eq("id", company.id);
       if (error) throw error;
       alert("Mercado Pago configurado! Pagamentos vão direto para sua conta.");

@@ -25,8 +25,9 @@ export default function ZonesPage() {
   async function load() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
     const { data } = await supabase.from("zones").select("*").eq("company_id", companyId).order("created_at");
@@ -66,8 +67,9 @@ export default function ZonesPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       if (!session) return;
       const res = await fetch(`${url}/functions/v1/create-zone`, {
         method: "POST",
@@ -85,7 +87,7 @@ export default function ZonesPage() {
     if (!confirm("Excluir zona?")) return;
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("zones").delete().eq("id", id);
     load();
   }
@@ -93,7 +95,7 @@ export default function ZonesPage() {
   async function toggleActive(id: string, active: boolean) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("zones").update({ active: !active }).eq("id", id);
     load();
   }

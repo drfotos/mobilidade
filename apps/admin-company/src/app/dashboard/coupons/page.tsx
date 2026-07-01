@@ -15,8 +15,9 @@ export default function CouponsPage() {
   async function load() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
     const { data } = await supabase.from("coupons").select("*").eq("company_id", companyId).order("created_at", { ascending: false });
@@ -31,8 +32,9 @@ export default function CouponsPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       const res = await fetch(`${url}/functions/v1/create-coupon`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session!.access_token}`, apikey: key },
@@ -55,7 +57,7 @@ export default function CouponsPage() {
     if (!confirm("Excluir cupom?")) return;
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("coupons").delete().eq("id", id);
     load();
   }
@@ -63,7 +65,7 @@ export default function CouponsPage() {
   async function toggleActive(id: string, active: boolean) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("coupons").update({ active: !active }).eq("id", id);
     load();
   }

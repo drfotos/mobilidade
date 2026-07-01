@@ -16,7 +16,10 @@ export default function AdminCompanyDashboard() {
       try {
         const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
         const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-        const supabase = createClient(url, key);
+        // Create client with session persistence to auto-send JWT
+        const supabase = createClient(url, key, {
+          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+        });
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return router.push("/auth/login");
         const role = session.user.app_metadata?.role;
@@ -25,12 +28,25 @@ export default function AdminCompanyDashboard() {
           await supabase.auth.signOut();
           return router.push("/auth/login");
         }
-        const { data: comp } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
-        setCompany(comp);
-        if (comp?.theme?.primary) document.documentElement.style.setProperty("--tenant-primary", comp.theme.primary);
-        if (comp?.theme?.secondary) document.documentElement.style.setProperty("--tenant-secondary", comp.theme.secondary);
 
-        // Use regular select instead of head:true count (views don't support count headers)
+        // Set auth session explicitly to ensure JWT is sent with REST requests
+        await supabase.auth.setSession({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token
+        });
+
+        const { data: comp } = await supabase.from("companies").select("name, plan, theme, primary_color, secondary_color").eq("id", companyId).maybeSingle();
+        if (!comp) {
+          console.error("Company not found for companyId:", companyId);
+          setLoading(false);
+          return;
+        }
+        setCompany(comp);
+        if (comp?.primary_color) document.documentElement.style.setProperty("--tenant-primary", comp.primary_color);
+        else if (comp?.theme?.primary) document.documentElement.style.setProperty("--tenant-primary", comp.theme.primary);
+        if (comp?.secondary_color) document.documentElement.style.setProperty("--tenant-secondary", comp.secondary_color);
+        else if (comp?.theme?.secondary) document.documentElement.style.setProperty("--tenant-secondary", comp.theme.secondary);
+
         const { data: driversData } = await supabase.from("drivers").select("id").eq("company_id", companyId);
         const { data: driversOnlineData } = await supabase.from("drivers").select("id").eq("company_id", companyId).eq("status", "active");
         const today = new Date(); today.setHours(0, 0, 0, 0);

@@ -16,8 +16,9 @@ export default function CategoriesPage() {
   async function load() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
     if (!session) return router.push("/auth/login");
     const companyId = session.user.app_metadata?.company_id;
     const { data } = await supabase.from("categories").select("*").eq("company_id", companyId).order("created_at");
@@ -33,8 +34,9 @@ export default function CategoriesPage() {
     try {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const supabase = createClient(url, key);
+      const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
       const { data: { session } } = await supabase.auth.getSession();
+      if (session) { await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }); }
       if (!session) return;
       const companyId = session.user.app_metadata?.company_id;
       const { error } = await supabase.from("categories").insert({ ...form, company_id: companyId, vehicle_types: ["sedan", "hatch"] });
@@ -49,7 +51,7 @@ export default function CategoriesPage() {
     if (!confirm("Excluir esta categoria?")) return;
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("categories").delete().eq("id", id);
     load();
   }
@@ -57,7 +59,7 @@ export default function CategoriesPage() {
   async function toggleActive(id: string, active: boolean) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(url, key);
+    const supabase = createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     await supabase.from("categories").update({ active: !active }).eq("id", id);
     load();
   }
