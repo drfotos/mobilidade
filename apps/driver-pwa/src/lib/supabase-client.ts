@@ -12,5 +12,22 @@ export function getSupabase() {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     realtime: { params: { eventsPerSecond: 10 } },
   });
+
+  // Force load session from localStorage — ensures Realtime has the JWT
+  if (typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("sb-vlkrlpcniippudhgggwt-auth-token");
+      if (stored) {
+        const session = JSON.parse(stored);
+        if (session.access_token && session.refresh_token) {
+          client.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          });
+        }
+      }
+    } catch {}
+  }
+
   return client;
 }

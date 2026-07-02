@@ -74,16 +74,35 @@ export default function DriverApp() {
             setView("finished");
           }
         })
-        // Also listen for status changes on available rides (someone else accepted)
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `company_id=eq.${companyId}` }, (payload: any) => {
           if (payload.new.status !== "solicitada") {
-            // Remove from available list
             setAvailableRides((prev) => prev.filter(r => r.id !== payload.new.id));
           }
         })
         .subscribe();
 
-      return () => { supabase.removeChannel(channel); };
+      // POLLING FALLBACK: a cada 5s, buscar corridas solicitadas
+      // (caso o Realtime não funcione no navegador/PWA)
+      const pollInterval = setInterval(async () => {
+        if (driverRef.current?.status !== "active") return;
+        try {
+          const rides = await supaQuery(`rides?select=*&company_id=eq.${companyId}&status=eq.solicitada&order=created_at.desc&limit=10`);
+          if (rides && rides.length > 0) {
+            setAvailableRides((prev) => {
+              const existingIds = new Set(prev.map(r => r.id));
+              const newRides = rides.filter((r: any) => !existingIds.has(r.id));
+              return newRides.length > 0 ? [...newRides, ...prev].slice(0, 10) : prev;
+            });
+          }
+        } catch (err) {
+          console.error("Polling error:", err);
+        }
+      }, 5000);
+
+      return () => {
+        supabase.removeChannel(channel);
+        clearInterval(pollInterval);
+      };
     }
     init();
   }, [router]);
