@@ -11,6 +11,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [mpConfig, setMpConfig] = useState({ access_token: "", public_key: "" });
   const [mapsConfig, setMapsConfig] = useState({ provider: "osm", google_api_key: "", mapbox_token: "", here_api_key: "" });
+  const [paymentMethods, setPaymentMethods] = useState({ cash: true, credit_card: false, pix: false, machine: false });
 
   useEffect(() => {
     async function load() {
@@ -23,6 +24,7 @@ export default function SettingsPage() {
         setCompany(comp);
         setMpConfig(comp?.mercadopago_config || { access_token: "", public_key: "" });
         setMapsConfig(comp?.maps_config || { provider: "osm", google_api_key: "", mapbox_token: "", here_api_key: "" });
+        setPaymentMethods(comp?.settings?.payment_methods || { cash: true, credit_card: false, pix: false, machine: false });
       } catch (err) {
         console.error("load settings error:", err);
       }
@@ -58,6 +60,17 @@ export default function SettingsPage() {
     try {
       await supaUpdate("companies", `id=eq.${company.id}`, { mercadopago_config: mpConfig });
       alert("Mercado Pago configurado! Pagamentos vão direto para sua conta.");
+    } catch (err) { alert("Erro: " + (err as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  async function savePaymentMethods() {
+    setSaving(true);
+    try {
+      const newSettings = { ...company.settings, payment_methods: paymentMethods };
+      await supaUpdate("companies", `id=eq.${company.id}`, { settings: newSettings });
+      setCompany({ ...company, settings: newSettings });
+      alert("Formas de pagamento salvas!");
     } catch (err) { alert("Erro: " + (err as Error).message); }
     finally { setSaving(false); }
   }
@@ -130,6 +143,33 @@ export default function SettingsPage() {
             {mapsConfig.provider === "here" && (
               <div><label className="block text-sm font-medium text-slate-700 mb-1.5">HERE API Key</label><input type="password" value={mapsConfig.here_api_key || ""} onChange={(e) => setMapsConfig({ ...mapsConfig, here_api_key: e.target.value })} className="w-full h-10 px-3 rounded-md border border-slate-300 font-mono text-xs" /></div>
             )}
+          </div>
+        </section>
+
+        {/* Formas de pagamento */}
+        <section className="bg-white rounded-xl border border-slate-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-slate-900">Formas de pagamento</h2>
+            <button onClick={savePaymentMethods} disabled={saving} className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-cyan-500 text-white text-sm hover:bg-cyan-600 disabled:opacity-50"><Save className="w-4 h-4" /> Salvar</button>
+          </div>
+          <p className="text-sm text-slate-600 mb-4">Habilite as formas de pagamento que sua operação aceita. O passageiro só verá as opções habilitadas.</p>
+          <div className="space-y-3">
+            <label className="flex items-center gap-3 p-3 rounded-md border border-slate-200 cursor-pointer hover:bg-slate-50">
+              <input type="checkbox" checked={paymentMethods.cash} onChange={(e) => setPaymentMethods({ ...paymentMethods, cash: e.target.checked })} className="w-5 h-5 rounded" />
+              <div><div className="font-medium text-slate-900">💵 Dinheiro</div><div className="text-xs text-slate-500">Passageiro paga em dinheiro direto ao motorista</div></div>
+            </label>
+            <label className="flex items-center gap-3 p-3 rounded-md border border-slate-200 cursor-pointer hover:bg-slate-50">
+              <input type="checkbox" checked={paymentMethods.credit_card} onChange={(e) => setPaymentMethods({ ...paymentMethods, credit_card: e.target.checked })} className="w-5 h-5 rounded" />
+              <div><div className="font-medium text-slate-900">💳 Cartão de crédito (Mercado Pago)</div><div className="text-xs text-slate-500">Cobrança automática ao finalizar corrida. Requer Mercado Pago configurado abaixo.</div></div>
+            </label>
+            <label className="flex items-center gap-3 p-3 rounded-md border border-slate-200 cursor-pointer hover:bg-slate-50">
+              <input type="checkbox" checked={paymentMethods.pix} onChange={(e) => setPaymentMethods({ ...paymentMethods, pix: e.target.checked })} className="w-5 h-5 rounded" />
+              <div><div className="font-medium text-slate-900">📱 PIX (Mercado Pago)</div><div className="text-xs text-slate-500">Gera QR Code PIX para o passageiro pagar. Requer Mercado Pago configurado.</div></div>
+            </label>
+            <label className="flex items-center gap-3 p-3 rounded-md border border-slate-200 cursor-pointer hover:bg-slate-50">
+              <input type="checkbox" checked={paymentMethods.machine} onChange={(e) => setPaymentMethods({ ...paymentMethods, machine: e.target.checked })} className="w-5 h-5 rounded" />
+              <div><div className="font-medium text-slate-900">🏪 Maquininha do motorista</div><div className="text-xs text-slate-500">Motorista confirma recebimento manualmente ao finalizar</div></div>
+            </label>
           </div>
         </section>
 

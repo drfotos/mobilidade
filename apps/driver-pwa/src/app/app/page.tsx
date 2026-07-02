@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, LogOut, MapPin, Navigation, Check, X, AlertTriangle } from "lucide-react";
-import { enableDriverPwaFeatures, isIOS } from "@saas/pwa-helpers";
+import { LogOut, MapPin, Navigation, Check, X } from "lucide-react";
+import { enableDriverPwaFeatures } from "@saas/pwa-helpers";
 import { getSession, supaQuery, supaUpdate, callFunction, signOut } from "@/lib/supa";
 import { getSupabase } from "@/lib/supabase-client";
 
@@ -11,15 +11,15 @@ export default function DriverApp() {
   const [driver, setDriver] = useState<any>(null);
   const [online, setOnline] = useState(false);
   const [position, setPosition] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsStatus, setGpsStatus] = useState("aguardando");
   const [availableRides, setAvailableRides] = useState<any[]>([]);
   const [activeRide, setActiveRide] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [zoneStatus, setZoneStatus] = useState<{ inZone: boolean; message: string | null }>({ inZone: false, message: null });
-  const [pwaFeaturesActive, setPwaFeaturesActive] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   const cleanupPwaRef = useRef<(() => void) | null>(null);
   const driverRef = useRef<any>(null);
-  const companyIdRef = useRef<string | null>(null);
+  const positionRef = useRef<{ lat: number; lng: number } | null>(null);
+  const sendIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     async function init() {
@@ -28,24 +28,26 @@ export default function DriverApp() {
       const role = session.user.app_metadata?.role;
       const companyId = session.user.app_metadata?.company_id;
       if (role !== "driver" || !companyId) { signOut(); return; }
-      companyIdRef.current = companyId;
 
       try {
         const u = await supaQuery(`users?select=id,drivers!inner(id,status,cnh_category,total_rides,rating)&auth_user_id=eq.${session.user.id}`);
-        const userRow = u?.[0];
-        if (!userRow?.drivers?.[0]) { alert("Perfil de motorista não encontrado. Contate sua empresa."); return; }
-        const drv = userRow.drivers[0];
-        if (drv.status === "pending") { alert("Cadastro pendente. Aguarde aprovação."); return router.push("/auth/login"); }
+        const drv = u?.[0]?.drivers?.[0];
+        if (!drv) { alert("Perfil de motorista não encontrado."); return; }
+        if (drv.status === "pending") { alert("Cadastro pendente."); return router.push("/auth/login"); }
         if (drv.status === "suspended") { alert("Cadastro suspenso."); return router.push("/auth/login"); }
         setDriver(drv);
         driverRef.current = drv;
         setLoading(false);
       } catch (err) {
-        console.error("init error:", err);
-        alert("Erro ao carregar perfil de motorista.");
+        console.error("init:", err);
+        setLoading(false);
+        return;
       }
 
-      // Realtime via createClient (WebSocket envia o token corretamente)
+      // Start GPS IMMEDIATELY on page load
+      startGPS();
+
+      // Realtime for ride updates
       const supabase = getSupabase();
       const channel = supabase.channel("rides-available")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "rides", filter: `company_id=eq.${companyId}` }, (payload: any) => {
@@ -54,71 +56,103 @@ export default function DriverApp() {
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `driver_id=eq.${driverRef.current?.id}` }, (payload: any) => setActiveRide(payload.new))
         .subscribe();
 
-      return () => { supabase.removeChannel(channel); };
+      return () => {
+        supabase.removeChannel(channel);
+        if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+        if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
+        if (cleanupPwaRef.current) cleanupPwaRef.current();
+      };
     }
     init();
   }, [router]);
 
-  useEffect(() => {
-    if (!online || !driver) return;
-    if (!navigator.geolocation) { alert("GPS não suportado"); setOnline(false); return; }
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => { const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }; setPosition(newPos); sendPosition(newPos); },
-      (err) => { console.error("Geolocation error:", err); alert("Erro GPS. Verifique permissões."); setOnline(false); },
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
-    );
-    return () => { if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current); };
-  }, [online, driver]);
+  function startGPS() {
+    if (!navigator.geolocation) { setGpsStatus("unsupported"); return; }
+    setGpsStatus("searching");
 
-  async function sendPosition(pos: { lat: number; lng: number }) {
-    try {
-      await callFunction("update-driver-position", pos);
-    } catch (err) { console.error("sendPosition error:", err); }
+    // First: get a single position quickly
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        positionRef.current = newPos;
+        setPosition(newPos);
+        setGpsStatus("ok");
+      },
+      (err) => {
+        console.error("GPS getCurrentPosition error:", err);
+        setGpsStatus("error:" + (err.message || "Permissão negada"));
+      },
+      { enableHighAccuracy: false, timeout: 20000, maximumAge: 30000 }
+    );
+
+    // Then: watch position continuously
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        positionRef.current = newPos;
+        setPosition(newPos);
+        setGpsStatus("ok");
+        if (driverRef.current) sendPosition(newPos);
+      },
+      (err) => {
+        console.error("GPS watchPosition error:", err);
+        if (err.code === 1) setGpsStatus("error:Permissão de localização negada. Habilite nas configurações do navegador.");
+        else if (err.code === 3) setGpsStatus("error:Timeout do GPS. Tente fora de ambientes fechados.");
+        else setGpsStatus("error:" + err.message);
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+    );
   }
 
-  async function checkZoneStatus(lat: number, lng: number): Promise<{ inZone: boolean; message: string | null }> {
-    try {
-      const data = await callFunction("check-zone", { lat, lng });
-      return { inZone: data.in_zone === true, message: data.message };
-    } catch (err) {
-      console.error("checkZone error:", err);
-      return { inZone: false, message: "Erro ao verificar zona" };
-    }
+  async function sendPosition(pos: { lat: number; lng: number }) {
+    try { await callFunction("update-driver-position", pos); } catch (err) { console.error("sendPosition:", err); }
   }
 
   async function toggleOnline() {
     if (!driver) return;
 
-    // Se vai ficar online, valida zona primeiro
     if (!online) {
-      if (!position) {
-        alert("Aguardando GPS... tente novamente em alguns segundos.");
-        return;
-      }
-      const zone = await checkZoneStatus(position.lat, position.lng);
-      setZoneStatus(zone);
-      if (!zone.inZone) {
-        alert(`🚫 ${zone.message || "Zona não habilitada — você está fora da área de operação"}`);
+      // Check GPS
+      if (!positionRef.current) {
+        // Try one more time
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            positionRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            setPosition(positionRef.current);
+            setGpsStatus("ok");
+            toggleOnline();
+          },
+          () => alert("⚠️ Não foi possível obter sua localização.\n\nVerifique:\n1. GPS ligado\n2. Permissão de localização concedida ao navegador\n3. Não estar em ambiente fechado"),
+          { enableHighAccuracy: true, timeout: 15000 }
+        );
         return;
       }
 
-      // Ativa PWA features (Wake Lock + audio silencioso + storage)
+      // Check zone (but don't block if it fails)
       try {
-        cleanupPwaRef.current = await enableDriverPwaFeatures();
-        setPwaFeaturesActive(true);
-        if (isIOS()) {
-          console.log("[driver] iOS detectado — Wake Lock + áudio silencioso ativos");
+        const zone = await callFunction("check-zone", { lat: positionRef.current.lat, lng: positionRef.current.lng });
+        if (!zone.in_zone) {
+          alert(`🚫 ${zone.message || "Zona não habilitada — você está fora da área de operação"}`);
+          return;
         }
       } catch (err) {
-        console.warn("[driver] PWA features falharam (não crítico):", err);
+        console.warn("Zone check failed, allowing:", err);
       }
+
+      // Activate PWA features (Wake Lock etc)
+      try { cleanupPwaRef.current = await enableDriverPwaFeatures(); } catch (err) { console.warn("PWA features:", err); }
+
+      // Start sending position every 5 seconds
+      sendIntervalRef.current = setInterval(() => {
+        if (positionRef.current) sendPosition(positionRef.current);
+      }, 5000);
+
+      // Send immediately
+      sendPosition(positionRef.current);
     } else {
-      // Ficando offline — libera recursos PWA
-      if (cleanupPwaRef.current) {
-        cleanupPwaRef.current();
-        cleanupPwaRef.current = null;
-        setPwaFeaturesActive(false);
-      }
+      // Going offline
+      if (sendIntervalRef.current) { clearInterval(sendIntervalRef.current); sendIntervalRef.current = null; }
+      if (cleanupPwaRef.current) { cleanupPwaRef.current(); cleanupPwaRef.current = null; }
     }
 
     const newStatus = online ? "offline" : "active";
@@ -133,7 +167,7 @@ export default function DriverApp() {
       const data = await callFunction("accept-ride", { ride_id: rideId });
       setActiveRide(data.ride);
       setAvailableRides((prev) => prev.filter((r) => r.id !== rideId));
-    } catch (err) { alert("Erro ao aceitar: " + (err as Error).message); }
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function advanceRide(rideId: string, newStatus: string) {
@@ -146,22 +180,20 @@ export default function DriverApp() {
 
   async function finishRide(rideId: string) {
     try {
-      // Usa nova edge function com precificação completa (bandeirada + km + min + paradas + gorjeta)
       const data = await callFunction("finish-ride-payment", {
         ride_id: rideId,
         actual_distance_m: activeRide?.estimated_distance_m,
         actual_duration_s: activeRide?.estimated_duration_s,
-        tip_amount: 0, // gorjeta é adicionada pelo passageiro depois
-        wait_minutes: 0,
+        tip_amount: 0, wait_minutes: 0,
       });
       const fare = data.fare_breakdown?.total || data.fare || 0;
-      alert(`✓ Corrida finalizada!\n\nValor: R$ ${Number(fare).toFixed(2)}\n\nPassageiro será redirecionado para avaliação.`);
+      alert(`✓ Corrida finalizada!\n\nValor: R$ ${Number(fare).toFixed(2)}`);
       setActiveRide(null);
-    } catch (err) { alert("Erro ao finalizar: " + (err as Error).message); }
+    } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   async function handleSignOut() {
-    if (online) await toggleOnline();
+    if (online) { try { await supaUpdate("drivers", `id=eq.${driver?.id}`, { status: "offline" }); } catch {} }
     signOut();
   }
 
@@ -179,12 +211,22 @@ export default function DriverApp() {
         </div>
       </header>
       <main className="max-w-md mx-auto px-4 py-6 space-y-4">
+        {/* GPS status */}
+        {gpsStatus !== "ok" && (
+          <div className={`rounded-md px-4 py-3 text-sm text-center ${gpsStatus === "searching" || gpsStatus === "aguardando" ? "bg-amber-500/20 text-amber-300" : "bg-red-500/20 text-red-300"}`}>
+            {gpsStatus === "searching" && "📍 Obtendo localização do GPS..."}
+            {gpsStatus === "aguardando" && "📍 Aguardando GPS..."}
+            {gpsStatus === "unsupported" && "⚠️ GPS não suportado neste dispositivo"}
+            {gpsStatus?.startsWith("error") && `⚠️ ${gpsStatus.slice(6)}`}
+          </div>
+        )}
+
         {!activeRide && (
           <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 text-center">
             <div className="text-sm text-slate-400 mb-2">Status atual</div>
             <div className="text-2xl font-bold mb-4">{online ? "🟢 Online" : "🔴 Offline"}</div>
             <button onClick={toggleOnline} className={`w-full py-3 rounded-md font-semibold ${online ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}>{online ? "Ficar offline" : "Ficar online"}</button>
-            {online && position && <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-2"><MapPin className="w-3 h-3" />{position.lat.toFixed(5)}, {position.lng.toFixed(5)}</div>}
+            {position && <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-2"><MapPin className="w-3 h-3" />{position.lat.toFixed(5)}, {position.lng.toFixed(5)}</div>}
           </div>
         )}
         {activeRide && (

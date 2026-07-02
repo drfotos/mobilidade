@@ -63,6 +63,10 @@ export default function PassengerApp() {
           m.on("move", () => pin.setLatLng(m.getCenter()));
           m.on("moveend", () => { const c = m.getCenter(); setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng); });
           setMap(m);
+          // Multiple invalidateSize calls to handle different render timings
+          setTimeout(() => m.invalidateSize(), 100);
+          setTimeout(() => m.invalidateSize(), 500);
+          setTimeout(() => m.invalidateSize(), 1000);
           if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
               (pos) => { const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }; m.setView(newPos, 15); setOrigin(newPos); reverseGeocode(newPos.lat, newPos.lng); },
@@ -160,8 +164,8 @@ export default function PassengerApp() {
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white relative">
-      <div ref={mapContainerRef} className="absolute inset-0 z-0" />
+    <div className="fixed inset-0 bg-slate-950 text-white">
+      <div ref={mapContainerRef} className="absolute inset-0 z-0" style={{ width: "100%", height: "100%" }} />
       {!activeRide && (
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-full z-10 pointer-events-none">
           <div className="w-10 h-10 bg-cyan-500 rounded-full border-4 border-white shadow-lg flex items-center justify-center"><MapPin className="w-5 h-5 text-white" /></div>

@@ -15,3 +15,6 @@ input, textarea, select { font-family: inherit; }
 .animate-spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .leaflet-container { height: 100%; width: 100%; }
+
+.leaflet-container { background: #1e293b !important; }
+
