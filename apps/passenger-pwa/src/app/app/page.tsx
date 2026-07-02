@@ -28,6 +28,7 @@ export default function PassengerApp() {
   const [activeRide, setActiveRide] = useState<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const pinRef = useRef<any>(null);
   const rideIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -101,6 +102,12 @@ export default function PassengerApp() {
           const c = map.getCenter();
           if (step === "origin") { setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setOriginAddress); }
           else if (step === "destination") { setDestination({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setDestinationAddress); }
+          // Force invalidateSize after every move to keep tiles rendering
+          setTimeout(() => map.invalidateSize(), 50);
+        });
+        map.on("drag", () => {
+          // Keep tiles loading during drag
+          if (pinRef.current) pinRef.current.setLatLng(map.getCenter());
         });
         mapRef.current = map;
         setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 100);
@@ -121,12 +128,20 @@ export default function PassengerApp() {
   useEffect(() => {
     if (!mapRef.current) return;
     mapRef.current.off("moveend");
+    mapRef.current.off("drag");
     mapRef.current.on("moveend", () => {
       if (step === "active") return;
       const c = mapRef.current.getCenter();
       if (step === "origin") { setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setOriginAddress); }
       else if (step === "destination") { setDestination({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setDestinationAddress); }
+      setTimeout(() => mapRef.current?.invalidateSize(), 50);
     });
+    mapRef.current.on("drag", () => {
+      if (pinRef.current) pinRef.current.setLatLng(mapRef.current.getCenter());
+    });
+    // Invalidate size when step changes (panel height changes)
+    setTimeout(() => mapRef.current?.invalidateSize(), 100);
+    setTimeout(() => mapRef.current?.invalidateSize(), 300);
   }, [step]);
 
   async function reverseGeocode(lat: number, lng: number, setter: (s: string) => void) {
@@ -243,7 +258,7 @@ export default function PassengerApp() {
         </div>
       </header>
 
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-slate-900 rounded-t-2xl border-t border-slate-800 max-h-[65vh] overflow-y-auto">
+      <div className={`absolute bottom-0 left-0 right-0 z-20 bg-slate-900 rounded-t-2xl border-t border-slate-800 overflow-y-auto transition-all ${step === "origin" || step === "destination" ? "max-h-[30vh]" : "max-h-[65vh]"}`}>
         <div className="max-w-md mx-auto p-4 space-y-3">
 
           {/* ORIGIN */}
