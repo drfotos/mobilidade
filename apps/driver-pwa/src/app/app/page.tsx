@@ -118,7 +118,9 @@ export default function DriverApp() {
     try {
       const data = await callFunction("accept-ride", { ride_id: rideId });
       setActiveRide(data.ride);
-      await loadPassenger(data.ride.passenger_id);
+      // Usa passageiro retornado pela edge function (evita query extra)
+      if (data.passenger) setPassenger(data.passenger);
+      else await loadPassenger(data.ride.passenger_id);
       setAvailableRides([]);
       setView("in_ride");
     } catch (err) {
@@ -134,6 +136,17 @@ export default function DriverApp() {
       await supaUpdate("rides", `id=eq.${activeRide.id}`, { status: newStatus });
       const updated = { ...activeRide, status: newStatus };
       setActiveRide(updated);
+    } catch (err) { alert("Erro: " + (err as Error).message); }
+  }
+
+  async function cancelRide() {
+    if (!activeRide) return;
+    if (!confirm("Tem certeza que deseja cancelar esta corrida?")) return;
+    try {
+      await supaUpdate("rides", `id=eq.${activeRide.id}`, { status: "cancelada", driver_id: null });
+      setActiveRide(null);
+      setPassenger(null);
+      setView(driverRef.current?.status === "active" ? "available" : "offline");
     } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
@@ -346,9 +359,14 @@ export default function DriverApp() {
           {/* Status buttons */}
           <div className="space-y-2">
             {activeRide.status === "aceita" && (
-              <button onClick={() => updateRideStatus("chegando")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">
-                Cheguei no local de embarque
-              </button>
+              <>
+                <button onClick={() => updateRideStatus("chegando")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">
+                  Cheguei no local de embarque
+                </button>
+                <button onClick={() => cancelRide()} className="w-full py-2 rounded-md border border-red-800 text-red-400 text-sm hover:bg-red-900/20">
+                  Cancelar Corrida
+                </button>
+              </>
             )}
             {activeRide.status === "chegando" && (
               <button onClick={() => updateRideStatus("em_andamento")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">
