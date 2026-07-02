@@ -76,19 +76,21 @@ export default function PassengerApp() {
         const L = (await import("leaflet")).default;
         if (cancelled || !mapContainerRef.current) return;
         const map = L.map(mapContainerRef.current, {
-          center: [-23.5505, -46.6333],
-          zoom: 13,
-          zoomControl: false, // Remove default zoom control (the white box)
+          center: [-14.2350, -51.9253], // Centro do Brasil
+          zoom: 4, // Zoom baixo: mostra Brasil inteiro
+          zoomControl: false,
           attributionControl: true,
+          worldCopyJump: true,
+          minZoom: 3,
         });
-        // CartoDB tiles — much faster and more reliable than OSM direct
-        L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-          attribution: "© OpenStreetMap © CARTO",
+        // OpenStreetMap tiles direto do servidor oficial (mais estável no Brasil)
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap",
           maxZoom: 19,
-          keepBuffer: 10, // Pre-load 10 tiles beyond viewport
-          updateWhenZooming: false, // Don't update tiles during zoom animation
+          keepBuffer: 20, // Pré-carrega 20 tiles além do viewport
+          updateWhenZooming: false,
+          crossOrigin: true,
         }).addTo(map);
-        // Add zoom control to bottom-right (out of the way)
         L.control.zoom({ position: "bottomright" }).addTo(map);
 
         map.on("moveend", () => {
@@ -103,9 +105,21 @@ export default function PassengerApp() {
         setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 800);
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
-            (pos) => { if (cancelled) return; const p = { lat: pos.coords.latitude, lng: pos.coords.longitude }; map.setView(p, 14); setOrigin(p); reverseGeocode(p.lat, p.lng, setOriginAddress); },
-            () => { const d = { lat: -23.5505, lng: -46.6333 }; setOrigin(d); reverseGeocode(d.lat, d.lng, setOriginAddress); },
-            { enableHighAccuracy: true, timeout: 15000 }
+            (pos) => {
+              if (cancelled) return;
+              const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+              // Fly to user's real location with city-level zoom
+              map.flyTo([p.lat, p.lng], 14, { duration: 1.5 });
+              setOrigin(p);
+              reverseGeocode(p.lat, p.lng, setOriginAddress);
+            },
+            () => {
+              // No GPS — stay at Brazil view, user can drag
+              const d = { lat: -23.5505, lng: -46.6333 };
+              setOrigin(d);
+              reverseGeocode(d.lat, d.lng, setOriginAddress);
+            },
+            { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 }
           );
         }
       } catch (err) { console.error("Map:", err); }
