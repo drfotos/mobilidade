@@ -28,7 +28,6 @@ export default function PassengerApp() {
   const [activeRide, setActiveRide] = useState<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
-  const pinRef = useRef<any>(null);
   const rideIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -45,49 +44,30 @@ export default function PassengerApp() {
         if (cats?.[0]) setSelectedCategory(cats[0]);
         const comp = await supaQuery(`companies?select=settings&id=eq.${cId}`);
         if (comp?.[0]?.settings?.payment_methods) setPaymentMethods(comp[0].settings.payment_methods);
-
-        // Check if passenger has active ride
         if (u?.[0]?.id) {
           const rides = await supaQuery(`rides?select=*&passenger_id=eq.${u[0].id}&status=in.(solicitada,aceita,chegando,em_andamento)&order=created_at.desc&limit=1`);
-          if (rides?.[0]) {
-            setActiveRide(rides[0]);
-            rideIdRef.current = rides[0].id;
-            setStep("active");
-          }
+          if (rides?.[0]) { setActiveRide(rides[0]); rideIdRef.current = rides[0].id; setStep("active"); }
         }
       } catch (err) { console.error("init:", err); }
       setLoading(false);
-
-      // Realtime (with session fix)
       const supabase = getSupabase();
       const channel = supabase.channel("passenger-ride")
         .on("postgres_changes", { event: "*", schema: "public", table: "rides" }, (payload: any) => {
-          if (payload.new && rideIdRef.current && payload.new.id === rideIdRef.current) {
-            setActiveRide(payload.new);
-          }
-        })
-        .subscribe();
-
-      // POLLING FALLBACK: check ride status every 3s
+          if (payload.new && rideIdRef.current && payload.new.id === rideIdRef.current) setActiveRide(payload.new);
+        }).subscribe();
       const pollInterval = setInterval(async () => {
         if (!rideIdRef.current) return;
         try {
           const rides = await supaQuery(`rides?select=*&id=eq.${rideIdRef.current}&limit=1`);
-          if (rides?.[0]) {
-            setActiveRide((prev: any) => {
-              if (prev && prev.status === rides[0].status) return prev;
-              return rides[0];
-            });
-          }
+          if (rides?.[0]) setActiveRide((prev: any) => (prev && prev.status === rides[0].status ? prev : rides[0]));
         } catch (err) { console.error("Polling:", err); }
       }, 3000);
-
       return () => { supabase.removeChannel(channel); clearInterval(pollInterval); };
     }
     init();
   }, [router]);
 
-  // Initialize map
+  // Initialize map — ONCE, no invalidateSize on moveend
   useEffect(() => {
     if (loading || !mapContainerRef.current || mapRef.current) return;
     let cancelled = false;
@@ -95,27 +75,35 @@ export default function PassengerApp() {
       try {
         const L = (await import("leaflet")).default;
         if (cancelled || !mapContainerRef.current) return;
-        const map = L.map(mapContainerRef.current, { center: [-23.5505, -46.6333], zoom: 14, zoomControl: true });
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 19 }).addTo(map);
+        const map = L.map(mapContainerRef.current, {
+          center: [-23.5505, -46.6333],
+          zoom: 13,
+          zoomControl: false, // Remove default zoom control (the white box)
+          attributionControl: true,
+        });
+        // CartoDB tiles — much faster and more reliable than OSM direct
+        L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+          attribution: "© OpenStreetMap © CARTO",
+          maxZoom: 19,
+          keepBuffer: 10, // Pre-load 10 tiles beyond viewport
+          updateWhenZooming: false, // Don't update tiles during zoom animation
+        }).addTo(map);
+        // Add zoom control to bottom-right (out of the way)
+        L.control.zoom({ position: "bottomright" }).addTo(map);
+
         map.on("moveend", () => {
           if (step === "active") return;
           const c = map.getCenter();
           if (step === "origin") { setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setOriginAddress); }
           else if (step === "destination") { setDestination({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setDestinationAddress); }
-          // Force invalidateSize after every move to keep tiles rendering
-          setTimeout(() => map.invalidateSize(), 50);
-        });
-        map.on("drag", () => {
-          // Keep tiles loading during drag
-          if (pinRef.current) pinRef.current.setLatLng(map.getCenter());
         });
         mapRef.current = map;
-        setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 100);
-        setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 500);
-        setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 1500);
+        // Only invalidateSize on initial load — NOT on every moveend
+        setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 200);
+        setTimeout(() => { if (!cancelled) map.invalidateSize(); }, 800);
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
-            (pos) => { if (cancelled) return; const p = { lat: pos.coords.latitude, lng: pos.coords.longitude }; map.setView(p, 15); setOrigin(p); reverseGeocode(p.lat, p.lng, setOriginAddress); },
+            (pos) => { if (cancelled) return; const p = { lat: pos.coords.latitude, lng: pos.coords.longitude }; map.setView(p, 14); setOrigin(p); reverseGeocode(p.lat, p.lng, setOriginAddress); },
             () => { const d = { lat: -23.5505, lng: -46.6333 }; setOrigin(d); reverseGeocode(d.lat, d.lng, setOriginAddress); },
             { enableHighAccuracy: true, timeout: 15000 }
           );
@@ -125,23 +113,18 @@ export default function PassengerApp() {
     return () => { cancelled = true; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
   }, [loading]);
 
+  // Re-bind moveend when step changes + invalidateSize once (panel height changed)
   useEffect(() => {
     if (!mapRef.current) return;
     mapRef.current.off("moveend");
-    mapRef.current.off("drag");
     mapRef.current.on("moveend", () => {
       if (step === "active") return;
       const c = mapRef.current.getCenter();
       if (step === "origin") { setOrigin({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setOriginAddress); }
       else if (step === "destination") { setDestination({ lat: c.lat, lng: c.lng }); reverseGeocode(c.lat, c.lng, setDestinationAddress); }
-      setTimeout(() => mapRef.current?.invalidateSize(), 50);
     });
-    mapRef.current.on("drag", () => {
-      if (pinRef.current) pinRef.current.setLatLng(mapRef.current.getCenter());
-    });
-    // Invalidate size when step changes (panel height changes)
-    setTimeout(() => mapRef.current?.invalidateSize(), 100);
-    setTimeout(() => mapRef.current?.invalidateSize(), 300);
+    // ONE invalidateSize when step changes (panel resized) — with small delay for CSS transition
+    setTimeout(() => mapRef.current?.invalidateSize(), 350);
   }, [step]);
 
   async function reverseGeocode(lat: number, lng: number, setter: (s: string) => void) {
@@ -164,17 +147,14 @@ export default function PassengerApp() {
 
   function confirmDestination() {
     if (!origin || !destination) return;
-    // Add destination marker — DON'T use fitBounds (causes black screen)
     if (mapRef.current) {
       (async () => {
         const L = (await import("leaflet")).default;
         L.circleMarker([destination.lat, destination.lng], { radius: 8, color: "#ef4444", fillColor: "#ef4444", fillOpacity: 1, weight: 3 }).addTo(mapRef.current).bindPopup("🏁 Destino");
         L.polyline([[origin.lat, origin.lng], [destination.lat, destination.lng]], { color: "#06B6D4", weight: 3, dashArray: "5, 10" }).addTo(mapRef.current);
-        // Pan to center between origin and destination instead of fitBounds
         const midLat = (origin.lat + destination.lat) / 2;
         const midLng = (origin.lng + destination.lng) / 2;
         mapRef.current.panTo([midLat, midLng]);
-        setTimeout(() => mapRef.current?.invalidateSize(), 200);
       })();
     }
     calculateAllFares();
@@ -194,8 +174,7 @@ export default function PassengerApp() {
         const baseFee = Number(cat.base_fee) || Number(cat.base_fare) || 0;
         const perKm = Number(cat.per_km) || 0, perMin = Number(cat.per_min) || 0;
         const minFare = Number(cat.min_fare) || 0;
-        const total = Math.max(baseFee + perKm * distanceKm + perMin * durationMin, minFare);
-        newFares[cat.id] = +total.toFixed(2);
+        newFares[cat.id] = +Math.max(baseFee + perKm * distanceKm + perMin * durationMin, minFare).toFixed(2);
       }
       setFares(newFares);
     } catch (err) { console.error("Fares:", err); }
@@ -223,14 +202,11 @@ export default function PassengerApp() {
     if (!confirm("Cancelar esta corrida?")) return;
     try {
       await supaUpdate("rides", `id=eq.${activeRide.id}`, { status: "cancelada" });
-      setActiveRide(null);
-      rideIdRef.current = null;
-      setStep("origin");
+      setActiveRide(null); rideIdRef.current = null; setStep("origin");
     } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
-
   const pinColor = step === "destination" ? "#ef4444" : step === "categories" || step === "active" ? "transparent" : "#06B6D4";
 
   return (
@@ -258,9 +234,8 @@ export default function PassengerApp() {
         </div>
       </header>
 
-      <div className={`absolute bottom-0 left-0 right-0 z-20 bg-slate-900 rounded-t-2xl border-t border-slate-800 overflow-y-auto transition-all ${step === "origin" || step === "destination" ? "max-h-[30vh]" : "max-h-[65vh]"}`}>
+      <div className={`absolute bottom-0 left-0 right-0 z-20 bg-slate-900 rounded-t-2xl border-t border-slate-800 overflow-y-auto transition-all duration-300 ${step === "origin" || step === "destination" ? "max-h-[30vh]" : "max-h-[65vh]"}`}>
         <div className="max-w-md mx-auto p-4 space-y-3">
-
           {/* ORIGIN */}
           <div className="bg-slate-800 rounded-lg p-3">
             <div className="flex items-start gap-2">
@@ -272,7 +247,6 @@ export default function PassengerApp() {
               <button onClick={confirmOrigin} className="w-full mt-3 py-2.5 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600 flex items-center justify-center gap-2 text-sm"><Check className="w-4 h-4" /> Confirmar partida</button>
             )}
           </div>
-
           {/* DESTINATION */}
           {step !== "origin" && (
             <div className="bg-slate-800 rounded-lg p-3">
@@ -286,7 +260,6 @@ export default function PassengerApp() {
               )}
             </div>
           )}
-
           {/* CATEGORIES */}
           {step === "categories" && (
             <>
@@ -296,10 +269,7 @@ export default function PassengerApp() {
                   <div className="grid grid-cols-1 gap-2">
                     {categories.map((c) => (
                       <button key={c.id} onClick={() => setSelectedCategory(c)} className={`p-3 rounded-lg border text-left transition-colors flex items-center justify-between ${selectedCategory?.id === c.id ? "border-cyan-500 bg-cyan-500/10" : "border-slate-700 bg-slate-800 hover:border-slate-600"}`}>
-                        <div>
-                          <div className="font-semibold text-sm" style={{ color: c.color || "#06B6D4" }}>{c.name}</div>
-                          <div className="text-xs text-slate-400 mt-0.5">Base R$ {Number(c.base_fee || c.base_fare || 0).toFixed(2)} · {Number(c.per_km).toFixed(2)}/km</div>
-                        </div>
+                        <div><div className="font-semibold text-sm" style={{ color: c.color || "#06B6D4" }}>{c.name}</div><div className="text-xs text-slate-400 mt-0.5">Base R$ {Number(c.base_fee || c.base_fare || 0).toFixed(2)} · {Number(c.per_km).toFixed(2)}/km</div></div>
                         {fares[c.id] && <div className={`text-lg font-bold ${selectedCategory?.id === c.id ? "text-cyan-400" : "text-slate-300"}`}>R$ {fares[c.id].toFixed(2)}</div>}
                       </button>
                     ))}
@@ -320,7 +290,6 @@ export default function PassengerApp() {
               </button>
             </>
           )}
-
           {/* ACTIVE RIDE */}
           {step === "active" && activeRide && (
             <div className="space-y-3">
@@ -337,8 +306,6 @@ export default function PassengerApp() {
                 <div className="flex items-start gap-2"><div className="w-2 h-2 rounded-full bg-emerald-400 mt-1.5" /><div className="flex-1 truncate">{activeRide.origin_address}</div></div>
                 <div className="flex items-start gap-2"><div className="w-2 h-2 rounded-full bg-red-400 mt-1.5" /><div className="flex-1 truncate">{activeRide.destination_address}</div></div>
               </div>
-
-              {/* Timeline */}
               <div className="bg-slate-800 rounded-lg p-3 space-y-2">
                 {[
                   { key: "solicitada", label: "Corrida solicitada" },
@@ -349,31 +316,20 @@ export default function PassengerApp() {
                 ].map((s, i) => {
                   const order = ["solicitada", "aceita", "chegando", "em_andamento", "finalizada"];
                   const currentIdx = order.indexOf(activeRide.status);
-                  const stepIdx = i;
-                  const done = stepIdx < currentIdx;
-                  const current = stepIdx === currentIdx;
+                  const done = i < currentIdx; const current = i === currentIdx;
                   return (
                     <div key={s.key} className={`flex items-center gap-2 text-sm ${current ? "text-cyan-400" : done ? "text-slate-400" : "text-slate-600"}`}>
-                      <div className={`w-4 h-4 rounded-full ${done || current ? "bg-emerald-500" : "bg-slate-600"}`} />
-                      {s.label}
+                      <div className={`w-4 h-4 rounded-full ${done || current ? "bg-emerald-500" : "bg-slate-600"}`} />{s.label}
                     </div>
                   );
                 })}
               </div>
-
-              {/* Cancel button — only if solicitada */}
               {activeRide.status === "solicitada" && (
-                <button onClick={cancelRide} className="w-full py-2.5 rounded-md border border-red-800 text-red-400 text-sm hover:bg-red-900/20 flex items-center justify-center gap-2">
-                  <X className="w-4 h-4" /> Cancelar Corrida
-                </button>
+                <button onClick={cancelRide} className="w-full py-2.5 rounded-md border border-red-800 text-red-400 text-sm hover:bg-red-900/20 flex items-center justify-center gap-2"><X className="w-4 h-4" /> Cancelar Corrida</button>
               )}
-
-              {/* Rate button — if finalizada */}
               {activeRide.status === "finalizada" && (
                 <button onClick={() => router.push(`/rating?ride_id=${activeRide.id}`)} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">Avaliar corrida</button>
               )}
-
-              {/* Cancelada — voltar */}
               {activeRide.status === "cancelada" && (
                 <button onClick={() => { setActiveRide(null); rideIdRef.current = null; setStep("origin"); }} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">Nova corrida</button>
               )}
