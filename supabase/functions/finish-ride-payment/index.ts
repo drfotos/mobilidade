@@ -62,8 +62,11 @@ Deno.serve(async (req: Request) => {
     if (!companyId) return json({ error: "Sem empresa" }, 403);
 
     const body = await req.json();
-    const { ride_id, actual_distance_m, actual_duration_s, tip_amount = 0, wait_minutes = 0 } = body;
+    const { ride_id, actual_distance_m, actual_duration_s, tip_amount = 0, wait_minutes = 0, extras } = body;
     if (!ride_id) return json({ error: "ride_id obrigatório" }, 400);
+
+    // Extras (pedágio, espera, parada, outro) — valor fixo + extras, sem recálculo
+    const extrasTotal = extras ? (Number(extras.toll || 0) + Number(extras.wait || 0) + Number(extras.stop || 0) + Number(extras.other || 0)) : 0;
 
     // Busca ride
     const { data: ride } = await supabase.from("rides").select("*").eq("id", ride_id).eq("company_id", companyId).maybeSingle();
@@ -97,12 +100,17 @@ Deno.serve(async (req: Request) => {
       surge_mult: Number(ride.surge_mult) || 1,
     });
 
+    // NOVO MODELO: valor fixo + extras (sem recálculo de distância/tempo)
+    // O fare original já foi calculado na criação da corrida e NÃO muda
+    const baseFare = Number(ride.fare) || 0;
+    const finalFare = baseFare + extrasTotal + tip_amount;
+
     // Atualiza ride
     const { data: updated } = await supabase.from("rides").update({
       status: "finalizada",
       actual_distance_m, actual_duration_s,
-      fare: fare.afterMin, // tarifa sem gorjeta
-      final_fare: fare.total, // tarifa + gorjeta
+      fare: baseFare, // mantém o valor original
+      final_fare: finalFare, // base + extras + gorjeta
       tip_amount,
       finished_at: new Date().toISOString(),
     }).eq("id", ride_id).select().single();
@@ -111,17 +119,17 @@ Deno.serve(async (req: Request) => {
     await supabase.from("ride_events").insert({
       company_id: companyId, ride_id, event_type: "finished",
       actor_type: role, actor_id: user.id,
-      metadata: { fare_breakdown: fare, recalc_reason: null },
+      metadata: { base_fare: baseFare, extras: extrasTotal, extras_detail: extras, tip: tip_amount, final: finalFare },
     });
 
     // Cria payment (SEM split — direto pro cliente)
     const { data: payment } = await supabase.from("payments").insert({
       company_id: companyId, ride_id,
       provider: ride.payment_method || "mercadopago",
-      amount: fare.afterMin,
-      tip_amount: fare.tip,
-      discount_amount: fare.discount,
-      final_amount: fare.total,
+      amount: baseFare,
+      tip_amount: tip_amount,
+      discount_amount: 0,
+      final_amount: finalFare,
       // Split columns mantidas para compatibilidade mas zeradas (sem split)
       commission_rate: 0, commission_amount: 0, driver_payout: 0,
       status: ride.payment_method === "cash" || ride.payment_method === "machine" ? "pending" : "pending",
@@ -138,8 +146,8 @@ Deno.serve(async (req: Request) => {
       success: true,
       ride: updated,
       payment,
-      fare_breakdown: fare,
-      message: "Corrida finalizada. Aguarde avaliação.",
+      fare_breakdown: { base: baseFare, extras: extrasTotal, tip: tip_amount, total: finalFare },
+      message: "Corrida finalizada.",
     });
   } catch (err) {
     console.error("finish-ride-payment error:", err);

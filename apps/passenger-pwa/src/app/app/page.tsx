@@ -417,20 +417,56 @@ export default function PassengerApp() {
             </>
           )}
 
-          {/* ACTIVE RIDE */}
+          {/* ACTIVE RIDE — apenas status, sem rastreamento */}
           {step === "active" && activeRide && (
             <div className="space-y-3">
-              <div className="text-xs text-cyan-400">Corrida {activeRide.status}</div>
+              <div className="text-xs text-cyan-400">
+                {activeRide.status === "solicitada" && "⏳ Procurando motorista..."}
+                {activeRide.status === "aceita" && "✓ Motorista aceitou sua corrida!"}
+                {activeRide.status === "chegando" && "🚗 Motorista a caminho do embarque"}
+                {activeRide.status === "em_andamento" && "🚗 Corrida em andamento"}
+                {activeRide.status === "finalizada" && "✓ Corrida finalizada!"}
+              </div>
               <div className="text-2xl font-bold">R$ {activeRide.fare ? Number(activeRide.fare).toFixed(2) : "..."}</div>
               <div className="space-y-2 text-sm">
                 <div className="flex items-start gap-2"><div className="w-2 h-2 rounded-full bg-emerald-400 mt-1.5" /><div className="flex-1 truncate">{activeRide.origin_address}</div></div>
                 <div className="flex items-start gap-2"><div className="w-2 h-2 rounded-full bg-red-400 mt-1.5" /><div className="flex-1 truncate">{activeRide.destination_address}</div></div>
               </div>
-              {activeRide.status === "solicitada" && <div className="text-center text-sm text-slate-400 animate-pulse py-3">Procurando motorista...</div>}
-              {activeRide.status === "aceita" && <div className="text-center text-sm text-cyan-400 py-3">✓ Motorista a caminho!</div>}
-              {activeRide.status === "chegando" && <div className="text-center text-sm text-cyan-400 py-3">🚗 Motorista chegando!</div>}
-              {activeRide.status === "em_andamento" && <div className="text-center text-sm text-cyan-400 py-3">🚗 Em andamento...</div>}
-              {activeRide.status === "finalizada" && <div className="text-center text-sm text-emerald-400 py-3">✓ Corrida finalizada!</div>}
+
+              {/* Timeline de status */}
+              <div className="bg-slate-800 rounded-lg p-3 space-y-2">
+                <div className={`flex items-center gap-2 text-sm ${activeRide.status === "solicitada" ? "text-cyan-400" : "text-slate-500"}`}>
+                  <div className={`w-4 h-4 rounded-full ${["solicitada","aceita","chegando","em_andamento","finalizada"].includes(activeRide.status) ? "bg-cyan-500" : "bg-slate-600"}`} />
+                  Corrida solicitada
+                </div>
+                <div className={`flex items-center gap-2 text-sm ${activeRide.status === "aceita" ? "text-cyan-400" : ["chegando","em_andamento","finalizada"].includes(activeRide.status) ? "text-slate-400" : "text-slate-600"}`}>
+                  <div className={`w-4 h-4 rounded-full ${["aceita","chegando","em_andamento","finalizada"].includes(activeRide.status) ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  Motorista aceitou
+                </div>
+                <div className={`flex items-center gap-2 text-sm ${activeRide.status === "chegando" ? "text-cyan-400" : ["em_andamento","finalizada"].includes(activeRide.status) ? "text-slate-400" : "text-slate-600"}`}>
+                  <div className={`w-4 h-4 rounded-full ${["chegando","em_andamento","finalizada"].includes(activeRide.status) ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  Motorista chegou
+                </div>
+                <div className={`flex items-center gap-2 text-sm ${activeRide.status === "em_andamento" ? "text-cyan-400" : activeRide.status === "finalizada" ? "text-slate-400" : "text-slate-600"}`}>
+                  <div className={`w-4 h-4 rounded-full ${["em_andamento","finalizada"].includes(activeRide.status) ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  Em andamento
+                </div>
+                <div className={`flex items-center gap-2 text-sm ${activeRide.status === "finalizada" ? "text-emerald-400" : "text-slate-600"}`}>
+                  <div className={`w-4 h-4 rounded-full ${activeRide.status === "finalizada" ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  Finalizada
+                </div>
+              </div>
+
+              {activeRide.status === "finalizada" && (
+                <button
+                  onClick={() => {
+                    router.push(`/rating?ride_id=${activeRide.id}`);
+                  }}
+                  className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600"
+                >
+                  Avaliar corrida
+                </button>
+              )}
             </div>
           )}
         </div>

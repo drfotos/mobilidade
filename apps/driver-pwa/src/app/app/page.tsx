@@ -1,25 +1,23 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut, MapPin, Navigation, Check, X } from "lucide-react";
-import { enableDriverPwaFeatures } from "@saas/pwa-helpers";
+import { LogOut, Check, X, MapPin, Navigation, Phone, Plus, ChevronRight } from "lucide-react";
 import { getSession, supaQuery, supaUpdate, callFunction, signOut } from "@/lib/supa";
 import { getSupabase } from "@/lib/supabase-client";
 
+type DriverView = "loading" | "offline" | "available" | "in_ride" | "finished";
+
 export default function DriverApp() {
   const router = useRouter();
+  const [view, setView] = useState<DriverView>("loading");
   const [driver, setDriver] = useState<any>(null);
-  const [online, setOnline] = useState(false);
-  const [position, setPosition] = useState<{ lat: number; lng: number } | null>(null);
-  const [gpsStatus, setGpsStatus] = useState("aguardando");
   const [availableRides, setAvailableRides] = useState<any[]>([]);
   const [activeRide, setActiveRide] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const watchIdRef = useRef<number | null>(null);
-  const cleanupPwaRef = useRef<(() => void) | null>(null);
+  const [passenger, setPassenger] = useState<any>(null);
+  const [extras, setExtras] = useState({ toll: 0, wait: 0, stop: 0, other: 0 });
+  const [showExtras, setShowExtras] = useState(false);
   const driverRef = useRef<any>(null);
-  const positionRef = useRef<{ lat: number; lng: number } | null>(null);
-  const sendIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const companyIdRef = useRef<string>("");
 
   useEffect(() => {
     async function init() {
@@ -28,137 +26,91 @@ export default function DriverApp() {
       const role = session.user.app_metadata?.role;
       const companyId = session.user.app_metadata?.company_id;
       if (role !== "driver" || !companyId) { signOut(); return; }
+      companyIdRef.current = companyId;
 
       try {
         const u = await supaQuery(`users?select=id,drivers!inner(id,status,cnh_category,total_rides,rating)&auth_user_id=eq.${session.user.id}`);
         const drv = u?.[0]?.drivers?.[0];
-        if (!drv) { alert("Perfil de motorista não encontrado."); return; }
+        if (!drv) { alert("Perfil não encontrado."); return; }
         if (drv.status === "pending") { alert("Cadastro pendente."); return router.push("/auth/login"); }
         if (drv.status === "suspended") { alert("Cadastro suspenso."); return router.push("/auth/login"); }
         setDriver(drv);
         driverRef.current = drv;
-        setLoading(false);
+
+        // Check if driver has active ride
+        const rides = await supaQuery(`rides?select=*&driver_id=eq.${drv.id}&status=in.(aceita,chegando,embarque,em_andamento)&order=created_at.desc&limit=1`);
+        if (rides && rides[0]) {
+          setActiveRide(rides[0]);
+          await loadPassenger(rides[0].passenger_id);
+          setView("in_ride");
+        } else {
+          // Check if driver was online
+          setView(drv.status === "active" ? "available" : "offline");
+        }
       } catch (err) {
         console.error("init:", err);
-        setLoading(false);
-        return;
+        setView("offline");
       }
 
-      // Start GPS IMMEDIATELY on page load
-      startGPS();
-
-      // Realtime for ride updates
+      // Realtime: listen for new rides + updates to active ride
       const supabase = getSupabase();
-      const channel = supabase.channel("rides-available")
+      const channel = supabase.channel("driver-dispatch")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "rides", filter: `company_id=eq.${companyId}` }, (payload: any) => {
-          if (payload.new.status === "solicitada") setAvailableRides((prev) => [payload.new, ...prev].slice(0, 5));
+          if (payload.new.status === "solicitada" && driverRef.current?.status === "active") {
+            setAvailableRides((prev) => {
+              if (prev.find(r => r.id === payload.new.id)) return prev;
+              return [payload.new, ...prev].slice(0, 10);
+            });
+          }
         })
-        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `driver_id=eq.${driverRef.current?.id}` }, (payload: any) => setActiveRide(payload.new))
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `driver_id=eq.${driverRef.current?.id}` }, (payload: any) => {
+          const updated = payload.new;
+          if (["aceita", "chegando", "embarque", "em_andamento"].includes(updated.status)) {
+            setActiveRide(updated);
+            setView("in_ride");
+          }
+          if (updated.status === "finalizada") {
+            setActiveRide(updated);
+            setView("finished");
+          }
+        })
+        // Also listen for status changes on available rides (someone else accepted)
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rides", filter: `company_id=eq.${companyId}` }, (payload: any) => {
+          if (payload.new.status !== "solicitada") {
+            // Remove from available list
+            setAvailableRides((prev) => prev.filter(r => r.id !== payload.new.id));
+          }
+        })
         .subscribe();
 
-      return () => {
-        supabase.removeChannel(channel);
-        if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
-        if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
-        if (cleanupPwaRef.current) cleanupPwaRef.current();
-      };
+      return () => { supabase.removeChannel(channel); };
     }
     init();
   }, [router]);
 
-  function startGPS() {
-    if (!navigator.geolocation) { setGpsStatus("unsupported"); return; }
-    setGpsStatus("searching");
-
-    // First: get a single position quickly
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        positionRef.current = newPos;
-        setPosition(newPos);
-        setGpsStatus("ok");
-      },
-      (err) => {
-        console.error("GPS getCurrentPosition error:", err);
-        setGpsStatus("error:" + (err.message || "Permissão negada"));
-      },
-      { enableHighAccuracy: false, timeout: 20000, maximumAge: 30000 }
-    );
-
-    // Then: watch position continuously
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        positionRef.current = newPos;
-        setPosition(newPos);
-        setGpsStatus("ok");
-        if (driverRef.current) sendPosition(newPos);
-      },
-      (err) => {
-        console.error("GPS watchPosition error:", err);
-        if (err.code === 1) setGpsStatus("error:Permissão de localização negada. Habilite nas configurações do navegador.");
-        else if (err.code === 3) setGpsStatus("error:Timeout do GPS. Tente fora de ambientes fechados.");
-        else setGpsStatus("error:" + err.message);
-      },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
-    );
-  }
-
-  async function sendPosition(pos: { lat: number; lng: number }) {
-    try { await callFunction("update-driver-position", pos); } catch (err) { console.error("sendPosition:", err); }
+  async function loadPassenger(passengerId: string) {
+    try {
+      const p = await supaQuery(`users?select=name,phone&id=eq.${passengerId}`);
+      setPassenger(p?.[0] || null);
+    } catch {}
   }
 
   async function toggleOnline() {
     if (!driver) return;
-
-    if (!online) {
-      // Check GPS
-      if (!positionRef.current) {
-        // Try one more time
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            positionRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            setPosition(positionRef.current);
-            setGpsStatus("ok");
-            toggleOnline();
-          },
-          () => alert("⚠️ Não foi possível obter sua localização.\n\nVerifique:\n1. GPS ligado\n2. Permissão de localização concedida ao navegador\n3. Não estar em ambiente fechado"),
-          { enableHighAccuracy: true, timeout: 15000 }
-        );
-        return;
-      }
-
-      // Check zone (but don't block if it fails)
-      try {
-        const zone = await callFunction("check-zone", { lat: positionRef.current.lat, lng: positionRef.current.lng });
-        if (!zone.in_zone) {
-          alert(`🚫 ${zone.message || "Zona não habilitada — você está fora da área de operação"}`);
-          return;
-        }
-      } catch (err) {
-        console.warn("Zone check failed, allowing:", err);
-      }
-
-      // Activate PWA features (Wake Lock etc)
-      try { cleanupPwaRef.current = await enableDriverPwaFeatures(); } catch (err) { console.warn("PWA features:", err); }
-
-      // Start sending position every 5 seconds
-      sendIntervalRef.current = setInterval(() => {
-        if (positionRef.current) sendPosition(positionRef.current);
-      }, 5000);
-
-      // Send immediately
-      sendPosition(positionRef.current);
-    } else {
-      // Going offline
-      if (sendIntervalRef.current) { clearInterval(sendIntervalRef.current); sendIntervalRef.current = null; }
-      if (cleanupPwaRef.current) { cleanupPwaRef.current(); cleanupPwaRef.current = null; }
-    }
-
-    const newStatus = online ? "offline" : "active";
+    const newStatus = view === "offline" ? "active" : "offline";
     try {
       await supaUpdate("drivers", `id=eq.${driver.id}`, { status: newStatus });
-      setOnline(!online);
+      setDriver({ ...driver, status: newStatus });
+      driverRef.current = { ...driverRef.current, status: newStatus };
+      setView(newStatus === "active" ? "available" : "offline");
+
+      // If going online, fetch current available rides
+      if (newStatus === "active") {
+        const rides = await supaQuery(`rides?select=*&company_id=eq.${companyIdRef.current}&status=eq.solicitada&order=created_at.desc&limit=10`);
+        setAvailableRides(rides || []);
+      } else {
+        setAvailableRides([]);
+      }
     } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
@@ -166,104 +118,298 @@ export default function DriverApp() {
     try {
       const data = await callFunction("accept-ride", { ride_id: rideId });
       setActiveRide(data.ride);
-      setAvailableRides((prev) => prev.filter((r) => r.id !== rideId));
+      await loadPassenger(data.ride.passenger_id);
+      setAvailableRides([]);
+      setView("in_ride");
+    } catch (err) {
+      // "Corrida já aceita" — remove from list
+      setAvailableRides((prev) => prev.filter(r => r.id !== rideId));
+      alert((err as Error).message || "Corrida não disponível");
+    }
+  }
+
+  async function updateRideStatus(newStatus: string) {
+    if (!activeRide) return;
+    try {
+      await supaUpdate("rides", `id=eq.${activeRide.id}`, { status: newStatus });
+      const updated = { ...activeRide, status: newStatus };
+      setActiveRide(updated);
     } catch (err) { alert("Erro: " + (err as Error).message); }
   }
 
-  async function advanceRide(rideId: string, newStatus: string) {
+  async function finishRide() {
+    if (!activeRide) return;
     try {
-      await supaUpdate("rides", `id=eq.${rideId}`, { status: newStatus });
-      const data = await supaQuery(`rides?select=*&id=eq.${rideId}`);
-      setActiveRide(data?.[0] || null);
-    } catch (err) { alert("Erro: " + (err as Error).message); }
-  }
+      const totalExtras = Number(extras.toll) + Number(extras.wait) + Number(extras.stop) + Number(extras.other);
+      const baseFare = Number(activeRide.fare) || 0;
+      const finalFare = baseFare + totalExtras;
 
-  async function finishRide(rideId: string) {
-    try {
       const data = await callFunction("finish-ride-payment", {
-        ride_id: rideId,
-        actual_distance_m: activeRide?.estimated_distance_m,
-        actual_duration_s: activeRide?.estimated_duration_s,
-        tip_amount: 0, wait_minutes: 0,
+        ride_id: activeRide.id,
+        actual_distance_m: activeRide.estimated_distance_m,
+        actual_duration_s: activeRide.estimated_duration_s,
+        tip_amount: 0,
+        wait_minutes: 0,
+        extras: { ...extras, total: totalExtras },
       });
-      const fare = data.fare_breakdown?.total || data.fare || 0;
-      alert(`✓ Corrida finalizada!\n\nValor: R$ ${Number(fare).toFixed(2)}`);
+
+      const total = data.fare_breakdown?.total || finalFare;
+      alert(`✓ Corrida finalizada!\n\nBase: R$ ${baseFare.toFixed(2)}\nExtras: R$ ${totalExtras.toFixed(2)}\nTotal: R$ ${Number(total).toFixed(2)}`);
+
       setActiveRide(null);
+      setPassenger(null);
+      setExtras({ toll: 0, wait: 0, stop: 0, other: 0 });
+      setShowExtras(false);
+      setView(driverRef.current?.status === "active" ? "available" : "offline");
     } catch (err) { alert("Erro: " + (err as Error).message); }
+  }
+
+  function openInWaze() {
+    if (!activeRide) return;
+    const lat = typeof activeRide.destination === "string"
+      ? activeRide.destination.match(/-?\d+\.?\d*/g)?.[1] || -23.5505
+      : -23.5505;
+    const lng = typeof activeRide.destination === "string"
+      ? activeRide.destination.match(/-?\d+\.?\d*/g)?.[0] || -46.6333
+      : -46.6333;
+    window.open(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`, "_blank");
+  }
+
+  function openInGoogleMaps() {
+    if (!activeRide) return;
+    const dest = encodeURIComponent(activeRide.destination_address || "");
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest}`, "_blank");
+  }
+
+  function callPassenger() {
+    if (passenger?.phone) window.open(`tel:${passenger.phone}`);
   }
 
   async function handleSignOut() {
-    if (online) { try { await supaUpdate("drivers", `id=eq.${driver?.id}`, { status: "offline" }); } catch {} }
+    if (driver) { try { await supaUpdate("drivers", `id=eq.${driver.id}`, { status: "offline" }); } catch {} }
     signOut();
   }
 
-  if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
+  // ─── LOADING ─────────────────────────────────────────
+  if (view === "loading") return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Carregando...</div>;
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-slate-800 bg-slate-900/50">
-        <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${online ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
-            <span className="text-sm font-medium">{online ? "Online" : "Offline"}</span>
+  // ─── OFFLINE ─────────────────────────────────────────
+  if (view === "offline") {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white">
+        <header className="border-b border-slate-800 bg-slate-900/50">
+          <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-slate-600" />
+              <span className="text-sm font-medium">Offline</span>
+            </div>
+            <button onClick={handleSignOut} className="text-slate-400 hover:text-white"><LogOut className="w-5 h-5" /></button>
           </div>
-          <button onClick={handleSignOut} className="text-slate-400 hover:text-white"><LogOut className="w-5 h-5" /></button>
-        </div>
-      </header>
-      <main className="max-w-md mx-auto px-4 py-6 space-y-4">
-        {/* GPS status */}
-        {gpsStatus !== "ok" && (
-          <div className={`rounded-md px-4 py-3 text-sm text-center ${gpsStatus === "searching" || gpsStatus === "aguardando" ? "bg-amber-500/20 text-amber-300" : "bg-red-500/20 text-red-300"}`}>
-            {gpsStatus === "searching" && "📍 Obtendo localização do GPS..."}
-            {gpsStatus === "aguardando" && "📍 Aguardando GPS..."}
-            {gpsStatus === "unsupported" && "⚠️ GPS não suportado neste dispositivo"}
-            {gpsStatus?.startsWith("error") && `⚠️ ${gpsStatus.slice(6)}`}
+        </header>
+        <main className="max-w-md mx-auto px-4 py-8">
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-8 text-center">
+            <div className="text-3xl mb-4">🔴</div>
+            <div className="text-xl font-bold mb-2">Você está offline</div>
+            <p className="text-sm text-slate-400 mb-6">Fique online para receber oportunidades de corrida</p>
+            <button onClick={toggleOnline} className="w-full py-3 rounded-md bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Entrar Online</button>
           </div>
-        )}
+        </main>
+      </div>
+    );
+  }
 
-        {!activeRide && (
-          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 text-center">
-            <div className="text-sm text-slate-400 mb-2">Status atual</div>
-            <div className="text-2xl font-bold mb-4">{online ? "🟢 Online" : "🔴 Offline"}</div>
-            <button onClick={toggleOnline} className={`w-full py-3 rounded-md font-semibold ${online ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}>{online ? "Ficar offline" : "Ficar online"}</button>
-            {position && <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-2"><MapPin className="w-3 h-3" />{position.lat.toFixed(5)}, {position.lng.toFixed(5)}</div>}
-          </div>
-        )}
-        {activeRide && (
-          <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-6">
-            <div className="text-sm text-cyan-300 mb-2">Corrida ativa</div>
-            <div className="text-lg font-bold mb-4">Status: {activeRide.status}</div>
-            <div className="space-y-2 text-sm mb-4">
-              <div className="flex items-start gap-2"><div className="w-2 h-2 rounded-full bg-emerald-400 mt-1.5" /><div className="flex-1"><div className="text-xs text-slate-400">Origem</div><div>{activeRide.origin_address}</div></div></div>
-              <div className="flex items-start gap-2"><div className="w-2 h-2 rounded-full bg-red-400 mt-1.5" /><div className="flex-1"><div className="text-xs text-slate-400">Destino</div><div>{activeRide.destination_address}</div></div></div>
+  // ─── AVAILABLE (painel de oportunidades) ─────────────
+  if (view === "available") {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white">
+        <header className="border-b border-slate-800 bg-slate-900/50 sticky top-0 z-20">
+          <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-sm font-medium">Online</span>
             </div>
-            <div className="text-2xl font-bold text-cyan-400 mb-4">R$ {activeRide.fare ? Number(activeRide.fare).toFixed(2) : "..."}</div>
-            <div className="flex flex-col gap-2">
-              {activeRide.status === "aceita" && <button onClick={() => advanceRide(activeRide.id, "chegando")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600 flex items-center justify-center gap-2"><Navigation className="w-4 h-4" /> A caminho do embarque</button>}
-              {activeRide.status === "chegando" && <button onClick={() => advanceRide(activeRide.id, "embarque")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">Cheguei no local</button>}
-              {activeRide.status === "embarque" && <button onClick={() => advanceRide(activeRide.id, "em_andamento")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">Passageiro embarcou — iniciar</button>}
-              {activeRide.status === "em_andamento" && <button onClick={() => finishRide(activeRide.id)} className="w-full py-3 rounded-md bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Finalizar corrida</button>}
-            </div>
+            <button onClick={toggleOnline} className="text-xs text-red-400 hover:text-red-300">Sair</button>
           </div>
-        )}
-        {!activeRide && online && (
-          <div className="space-y-3">
-            <div className="text-sm text-slate-400">Corridas disponíveis ({availableRides.length})</div>
-            {availableRides.length === 0 && <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 text-center text-slate-500 text-sm">Aguardando corridas...</div>}
-            {availableRides.map((r) => (
-              <div key={r.id} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
-                <div className="flex items-start justify-between mb-3"><div className="flex-1"><div className="text-xs text-slate-400">Origem</div><div className="text-sm">{r.origin_address}</div></div><div className="text-lg font-bold text-cyan-400">R$ {Number(r.fare).toFixed(2)}</div></div>
-                <div className="mb-3"><div className="text-xs text-slate-400">Destino</div><div className="text-sm">{r.destination_address}</div></div>
-                <div className="flex gap-2">
-                  <button onClick={() => acceptRide(r.id)} className="flex-1 py-2 rounded-md bg-emerald-500 text-white font-semibold hover:bg-emerald-600 flex items-center justify-center gap-2"><Check className="w-4 h-4" /> Aceitar</button>
-                  <button onClick={() => setAvailableRides((prev) => prev.filter((x) => x.id !== r.id))} className="px-4 py-2 rounded-md bg-slate-800 text-slate-400 hover:bg-slate-700"><X className="w-4 h-4" /></button>
+        </header>
+        <main className="max-w-md mx-auto px-4 py-4 space-y-3">
+          <div className="text-sm text-slate-400">Oportunidades disponíveis ({availableRides.length})</div>
+          {availableRides.length === 0 && (
+            <div className="bg-slate-900 rounded-xl border border-slate-800 p-8 text-center text-slate-500">
+              <div className="text-3xl mb-3">⏳</div>
+              <p className="text-sm">Aguardando novas corridas...</p>
+            </div>
+          )}
+          {availableRides.map((ride) => (
+            <div key={ride.id} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              {/* Valor + Categoria */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-2xl font-bold text-cyan-400">R$ {Number(ride.fare).toFixed(2)}</div>
+                <span className="text-xs bg-slate-800 px-2 py-1 rounded">{ride.payment_method === "cash" ? "💵 Dinheiro" : ride.payment_method === "pix" ? "📱 PIX" : ride.payment_method === "credit_card" ? "💳 Cartão" : "🏪 Maquininha"}</span>
+              </div>
+
+              {/* Origem */}
+              <div className="flex items-start gap-2 mb-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 mt-1.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <div className="text-xs text-slate-500">Origem</div>
+                  <div className="text-sm">{ride.origin_address}</div>
                 </div>
               </div>
-            ))}
+
+              {/* Destino */}
+              <div className="flex items-start gap-2 mb-3">
+                <div className="w-2 h-2 rounded-full bg-red-400 mt-1.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <div className="text-xs text-slate-500">Destino</div>
+                  <div className="text-sm">{ride.destination_address}</div>
+                </div>
+              </div>
+
+              {/* Horário */}
+              <div className="text-xs text-slate-500 mb-3">
+                {new Date(ride.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+              </div>
+
+              {/* Aceitar */}
+              <button onClick={() => acceptRide(ride.id)} className="w-full py-3 rounded-md bg-emerald-500 text-white font-semibold hover:bg-emerald-600 flex items-center justify-center gap-2">
+                <Check className="w-4 h-4" /> Aceitar Corrida
+              </button>
+            </div>
+          ))}
+        </main>
+      </div>
+    );
+  }
+
+  // ─── IN RIDE ─────────────────────────────────────────
+  if (view === "in_ride" && activeRide) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white">
+        <header className="border-b border-slate-800 bg-slate-900/50">
+          <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+              <span className="text-sm font-medium">Em Corrida</span>
+            </div>
+            <span className="text-xs text-slate-500">{activeRide.status}</span>
           </div>
-        )}
-        {!online && !activeRide && <div className="bg-slate-900 rounded-xl border border-slate-800 p-8 text-center text-slate-500">Fique online para começar a receber corridas.</div>}
-      </main>
-    </div>
-  );
+        </header>
+
+        <main className="max-w-md mx-auto px-4 py-4 space-y-4">
+          {/* Valor */}
+          <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-4 text-center">
+            <div className="text-xs text-cyan-300 mb-1">Valor da corrida</div>
+            <div className="text-3xl font-bold text-cyan-400">R$ {Number(activeRide.fare).toFixed(2)}</div>
+            <div className="text-xs text-slate-400 mt-1">Valor fixo — não muda</div>
+          </div>
+
+          {/* Passageiro */}
+          {passenger && (
+            <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              <div className="text-xs text-slate-400 mb-2">Passageiro</div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">{passenger.name || "—"}</div>
+                  <div className="text-sm text-slate-400">{passenger.phone || "—"}</div>
+                </div>
+                {passenger.phone && (
+                  <button onClick={callPassenger} className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center hover:bg-emerald-600">
+                    <Phone className="w-5 h-5 text-white" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Endereços */}
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <div className="w-3 h-3 rounded-full bg-emerald-400 mt-1 flex-shrink-0" />
+              <div><div className="text-xs text-slate-400">Origem</div><div className="text-sm">{activeRide.origin_address}</div></div>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-3 h-3 rounded-full bg-red-400 mt-1 flex-shrink-0" />
+              <div><div className="text-xs text-slate-400">Destino</div><div className="text-sm">{activeRide.destination_address}</div></div>
+            </div>
+          </div>
+
+          {/* Navegação */}
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={openInGoogleMaps} className="py-3 rounded-md bg-blue-600 text-white font-semibold hover:bg-blue-700 flex items-center justify-center gap-2">
+              <Navigation className="w-4 h-4" /> Google Maps
+            </button>
+            <button onClick={openInWaze} className="py-3 rounded-md bg-cyan-600 text-white font-semibold hover:bg-cyan-700 flex items-center justify-center gap-2">
+              <Navigation className="w-4 h-4" /> Waze
+            </button>
+          </div>
+
+          {/* Status buttons */}
+          <div className="space-y-2">
+            {activeRide.status === "aceita" && (
+              <button onClick={() => updateRideStatus("chegando")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">
+                Cheguei no local de embarque
+              </button>
+            )}
+            {activeRide.status === "chegando" && (
+              <button onClick={() => updateRideStatus("em_andamento")} className="w-full py-3 rounded-md bg-cyan-500 text-white font-semibold hover:bg-cyan-600">
+                Passageiro embarcou — Iniciar corrida
+              </button>
+            )}
+            {activeRide.status === "em_andamento" && (
+              <button onClick={() => { setShowExtras(true); }} className="w-full py-3 rounded-md bg-emerald-500 text-white font-semibold hover:bg-emerald-600">
+                Finalizar Corrida
+              </button>
+            )}
+          </div>
+
+          {/* Extras panel */}
+          {showExtras && (
+            <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 space-y-3">
+              <div className="font-semibold">Adicionar taxas extras (opcional)</div>
+
+              <div>
+                <label className="text-xs text-slate-400">Pedágio (R$)</label>
+                <input type="number" step="0.01" value={extras.toll || ""} onChange={(e) => setExtras({ ...extras, toll: parseFloat(e.target.value) || 0 })} className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-700 text-white" placeholder="0.00" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Espera (R$)</label>
+                <input type="number" step="0.01" value={extras.wait || ""} onChange={(e) => setExtras({ ...extras, wait: parseFloat(e.target.value) || 0 })} className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-700 text-white" placeholder="0.00" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Parada adicional (R$)</label>
+                <input type="number" step="0.01" value={extras.stop || ""} onChange={(e) => setExtras({ ...extras, stop: parseFloat(e.target.value) || 0 })} className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-700 text-white" placeholder="0.00" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Outro (R$)</label>
+                <input type="number" step="0.01" value={extras.other || ""} onChange={(e) => setExtras({ ...extras, other: parseFloat(e.target.value) || 0 })} className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-700 text-white" placeholder="0.00" />
+              </div>
+
+              {/* Total */}
+              <div className="border-t border-slate-700 pt-3">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">Valor base</span>
+                  <span>R$ {Number(activeRide.fare || 0).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">Extras</span>
+                  <span>R$ {(Number(extras.toll) + Number(extras.wait) + Number(extras.stop) + Number(extras.other)).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-bold text-lg mt-2 text-cyan-400">
+                  <span>Total</span>
+                  <span>R$ {(Number(activeRide.fare || 0) + Number(extras.toll) + Number(extras.wait) + Number(extras.stop) + Number(extras.other)).toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <button onClick={() => setShowExtras(false)} className="flex-1 py-2.5 rounded-md border border-slate-700 text-slate-300">Cancelar</button>
+                <button onClick={finishRide} className="flex-1 py-2.5 rounded-md bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Confirmar Finalização</button>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
+  return null;
 }

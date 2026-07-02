@@ -1,4 +1,6 @@
-// Edge Function: accept-ride (first-accept-wins)
+// Edge Function: accept-ride
+// Aceitação atômica (first-accept-wins) — sem matching por distância
+// Retorna corrida + dados do passageiro (nome, telefone)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
@@ -18,12 +20,14 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Não autorizado" }, 401);
 
+    // Auth client for getUser()
     const authClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
       auth: { persistSession: false },
       global: { headers: { Authorization: authHeader } },
     });
+    // Admin client for DB queries (ignores RLS)
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
-      auth: { persistSession: false, autoRefreshToken: false },
+      auth: { persistSession: false },
     });
 
     const { data: { user } } = await authClient.auth.getUser();
@@ -35,22 +39,59 @@ Deno.serve(async (req: Request) => {
     const { ride_id } = await req.json();
     if (!ride_id) return json({ error: "ride_id obrigatório" }, 400);
 
-    const { data: driverRow } = await supabase.from("users").select("id, drivers!inner(id, status)").eq("auth_user_id", user.id).maybeSingle();
+    // Busca driver_id
+    const { data: driverRow } = await supabase
+      .from("users")
+      .select("id, drivers!inner(id, status)")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+
     if (!driverRow?.drivers?.[0]) return json({ error: "Motorista não encontrado" }, 404);
     const driverId = driverRow.drivers[0].id;
-    if (driverRow.drivers[0].status !== "active") return json({ error: "Motorista não está ativo" }, 403);
+    if (driverRow.drivers[0].status !== "active") return json({ error: "Motorista não está online" }, 403);
 
-    const { data: updated, error: updErr } = await supabase.from("rides").update({ driver_id: driverId, status: "aceita", accepted_at: new Date().toISOString() })
-      .eq("id", ride_id).eq("company_id", companyId).in("status", ["solicitada", "buscando"]).select().maybeSingle();
+    // ACEITAÇÃO ATÔMICA: UPDATE apenas se status = 'solicitada'
+    // Se outro motorista aceitou primeiro, retorna 0 rows → 409
+    const { data: updated, error: updErr } = await supabase
+      .from("rides")
+      .update({
+        driver_id: driverId,
+        status: "aceita",
+        accepted_at: new Date().toISOString(),
+      })
+      .eq("id", ride_id)
+      .eq("company_id", companyId)
+      .eq("status", "solicitada")
+      .select()
+      .maybeSingle();
 
-    if (updErr) return json({ error: "Erro ao aceitar corrida" }, 500);
-    if (!updated) return json({ error: "Corrida não está mais disponível" }, 409);
+    if (updErr) {
+      console.error("accept-ride update error:", updErr);
+      return json({ error: "Erro ao aceitar corrida" }, 500);
+    }
+    if (!updated) {
+      return json({ error: "Corrida já foi aceita por outro motorista" }, 409);
+    }
 
+    // Busca dados do passageiro (nome, telefone)
+    const { data: passenger } = await supabase
+      .from("users")
+      .select("name, phone")
+      .eq("id", updated.passenger_id)
+      .maybeSingle();
+
+    // Loga evento
     await supabase.from("ride_events").insert({
-      company_id: companyId, ride_id, event_type: "accepted", actor_type: "driver", actor_id: driverId, metadata: {},
+      company_id: companyId, ride_id, event_type: "accepted",
+      actor_type: "driver", actor_id: driverId, metadata: {},
     });
 
-    return json({ success: true, ride: updated });
+    // Retorna corrida + dados do passageiro
+    return json({
+      success: true,
+      ride: updated,
+      passenger: passenger || null,
+    });
   } catch (err) {
     console.error("accept-ride error:", err);
     return json({ error: "Erro interno" }, 500);
